@@ -1,6 +1,8 @@
+To download data from ARC use the following command format in Windows Subsystem for Linux (WSL):
 
 scp -r kbsanjayvasanth@datatransfer.arc.vt.edu: arc_path "local path"
 
-example:
+Example:
 
 scp -r kbsanjayvasanth@datatransfer.arc.vt.edu:/home/kbsanjayvasanth/Velocityraft2 "/mnt/e/no particle test smooth one case/"
+
