@@ -7,11 +7,11 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:1
-#SBATCH --mem=380G
-#SBATCH --partition=l40s_normal_q
+#SBATCH --mem=100G
+#SBATCH --partition=a30_normal_q
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=kbsanjayvasanth@vt.edu
-#SBATCH --job-name=Sm_51_lpm
+#SBATCH --mail-user=youremailid@vt.edu
+#SBATCH --job-name=jobname
 
 module reset
 module load MATLAB
@@ -27,12 +27,12 @@ echo " Start time:          $(date)"
 echo "============================================================"
 
 # GPU monitoring (every 300 seconds)
-nvidia-smi --query-gpu=timestamp,name,pci.bus_id,driver_version,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used --format=csv -l 300 > gpu.perform.$SLURM_JOBID.log &
+nvidia-smi --query-gpu=timestamp,name,pci.bus_id,driver_version,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used --format=csv -l 900 > gpu.perform.$SLURM_JOBID.log &
 
 # -------------------------------------------------------------------------
 # Launch MATLAB (non-interactive batch mode)
 # -------------------------------------------------------------------------
-matlab -nodisplay -nosplash -nodesktop -batch "run('/home/kbsanjayvasanth/Velocityraft2/smooth_52lpm/raftmatlabsideview_sanjay.m')"
+matlab -nodisplay -nosplash -nodesktop -batch "run('/home/kbsanjayvasanth/raft_newcode/raftmatlabsideview_ARC.m')"
 
 echo "============================================================"
 echo " Job finished at:     $(date)"
