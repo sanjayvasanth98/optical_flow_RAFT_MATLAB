@@ -1,29 +1,42 @@
-Optical Flow RAFT (ARC-Optimized MATLAB)
+# Optical Flow RAFT — ARC Optimized (MATLAB)
 
-MATLAB pipeline to compute RAFT optical flow on high-speed videos with GPU-first execution, ROI-aware masking, and HPC-safe memory/I/O. Produces calibrated velocity fields (m/s), time-averaged magnitude plots (with/without streamlines), throat-referenced streamwise profiles, and chunked .mat outputs for long runs.
+ARC/HPC-friendly MATLAB pipeline to compute **RAFT optical flow** on high-speed videos and produce **calibrated velocity fields (m/s)**, **time-averaged plots**, and **throat-referenced profiles** with robust memory/I/O handling.
 
-Features
+## What it does
+- Runs **opticalFlowRAFT** (GPU-first, CPU fallback)
+- Calibrates velocities using `mm_per_pixel` and `fps`
+- Applies **ROI masking** (and ROI-respecting 5-point neighbor averaging)
+- Streams results to disk with **chunked MAT writes** (default: every 100 frames)
+- Generates publication-ready time-averaged plots:
+  - Plot A: `|V|` + throat line
+  - Plot B: `|V|` + **ROI-only arrowed streamlines** + dark-blue overlay outside ROI
+- Saves ROI diagnostics as binary images
 
-Permanent fix for variable decoded frame sizes (forces all frames to reference H0×W0)
+## Requirements
+- MATLAB R2023b+ (recommended)
+- Computer Vision Toolbox (for `opticalFlowRAFT`)
+- Image Processing Toolbox
+- Parallel Computing Toolbox (optional, for GPU)
 
-ROI-respecting 5-point neighbor averaging (no bleed across ROI boundary)
+## Inputs
+- `videoPath` (AVI)
+- ROI mask: `mat files/<video>_ROI.mat` containing `maskROI` (1 = ROI, 0 = outside)
+- Throat file: `*_throat.mat` containing `x_throat`
+- Calibration: `mm_per_pixel`, `fps`
 
-Chunked MAT writes every writeChunk frames (default 100)
+## Outputs
+- `plots/`
+  - `<video>_TimeAvgVelMag_ThroatLine.png`
+  - `<video>_TimeAvgVelMag_Streamlines_ROI.png`
+  - `<video>_ROI_mask.png`, `<video>_ROI_outside.png`
+- `mat files/`
+  - `<video>_incremental.mat` (chunked frame outputs)
+  - `<video>_means.mat` (time-averaged fields + profiles)
+  - `<video>_ROI.mat` (persisted ROI)
 
-Two plots: (A) |V| + throat line, (B) |V| + ROI-only arrowed streamlines + dark-blue outside-ROI overlay
-
-Batch-safe (no figure popups), progress/ETA printing, optional GIF
-
-Outputs
-
-plots/: PNGs + ROI mask images
-
-mat files/: *_incremental.mat, *_means.mat, *_ROI.mat
-
-Run
-
-Set videoPath, calibration (mm_per_pixel, fps)
-
-Ensure mat files/<video>_ROI.mat and *_throat.mat exist (ROI auto-created as full-frame if missing)
-
-Run: raftmatlabsideview_ARC.m
+## How to run
+1. Edit `videoPath`, `mm_per_pixel`, `fps` in the script.
+2. Ensure `mat files/<video>_ROI.mat` and `*_throat.mat` exist (ROI auto-created full-frame if missing).
+3. Run:
+   ```matlab
+   raftmatlabsideview_ARC
