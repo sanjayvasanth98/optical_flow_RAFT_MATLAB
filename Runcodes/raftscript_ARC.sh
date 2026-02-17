@@ -8,10 +8,10 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --gres=gpu:1
 #SBATCH --mem=8G
-#SBATCH --partition=l40s_normal_q
+#SBATCH --partition=a30_normal_q
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=kbsanjayvasanth@vt.edu
-#SBATCH --job-name=smooth
+#SBATCH --mail-user=youremailid@vt.edu
+#SBATCH --job-name=jobname
 
 module reset
 module load MATLAB
