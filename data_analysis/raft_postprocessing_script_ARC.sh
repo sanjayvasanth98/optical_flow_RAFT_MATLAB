@@ -3,13 +3,13 @@
 #SBATCH --error=RAFT_SideView_%j.err
 #SBATCH --time=02:00:00
 #SBATCH --account=cavitation
-#SBATCH --nodes=2
-#SBATCH --ntasks=2
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=6G
 #SBATCH --partition=normal_q
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=kbsanjayvasanth@vt.edu
+#SBATCH --mail-user=youremailid@vt.edu
 #SBATCH --job-name=test
 
 set -euo pipefail
