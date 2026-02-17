@@ -10,7 +10,7 @@
 #SBATCH --partition=normal_q
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=youremailid@vt.edu
-#SBATCH --job-name=test
+#SBATCH --job-name=jobname
 
 set -euo pipefail
 
