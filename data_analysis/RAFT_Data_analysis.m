@@ -21,19 +21,21 @@
 % - Uses *_velocity.mat produced by your RAFT script:
 %   u_all, v_all, mm_per_pixel, fps, m_per_pixel, maskROI,
 %   (often) x_mm, y_mm, maskROI_phys, u_mean_phys, v_mean_phys, velMean_phys, x_throat_mm
-
+%
+% Author: Sanjay Vasanth | last edit: 2/17/2026
+%----------------------------------------------
 clear; clc;
 
 % ---------------- USER INPUTS ----------------
 % 1) List your cases here
 matPaths = { ...
-    "/home/kbsanjayvasanth/Inception_raft_test/smooth_w_particles/mat files/Smooth_48lpm_inc_velocity.mat"
+    "/home/kbsanjayvasanth/Inception_raft_test/smooth_w_particles/mat files/Smooth_48lpm_inc_velocity.mat"    % <-- EDIT THIS
     % "/path/to/case2_velocity.mat"
 };
 
 % 2) Labels (same order as matPaths) for legend
 caseLabels = { ...
-    "Smooth 48 lpm"
+    "Smooth 48 lpm"  % <-- EDIT THIS
     % "Case2"
 };
 
@@ -41,8 +43,8 @@ caseLabels = { ...
 userOutDir = "/home/kbsanjayvasanth/Inception_raft_test/data_analysis/results";  % <-- EDIT THIS
 
 % 4) Settings
-dx_mm       = 0.25;     % station spacing downstream from throat
-nStations   = 10;       % number of downstream stations to plot (excluding throat)
+dx_mm       = 0.25;     % profile spacing downstream from throat   % <-- EDIT THIS if needed
+nStations   = 10;       % number of downstream profile locations to plot (excluding throat)   % <-- EDIT THIS
 chunkFrames = 100;      % chunk size for stress computation (IO/RAM tradeoff)
 dpiExport   = 600;      % export DPI
 
@@ -450,3 +452,4 @@ end
 
 meanField = single(sumF / max(nTot,1));
 end
+
