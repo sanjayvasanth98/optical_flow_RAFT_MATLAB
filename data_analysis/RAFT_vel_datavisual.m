@@ -36,8 +36,8 @@ if isfile(userPathFile)
     fprintf('Loaded custom MATLAB path: %s\n', userPathFile);
 else
     warning('Custom pathdef.m not found. Using default MATLAB path.');
-end
-
+end 
+              
 %% ============================ CONFIG ====================================
 %  EDIT THIS BLOCK
 
