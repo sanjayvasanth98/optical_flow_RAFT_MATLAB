@@ -32,7 +32,7 @@ nvidia-smi --query-gpu=timestamp,name,pci.bus_id,driver_version,temperature.gpu,
 # -------------------------------------------------------------------------
 # Launch MATLAB (non-interactive batch mode)
 # -------------------------------------------------------------------------
-matlab -nodisplay -nosplash -nodesktop -batch "run('/home/kbsanjayvasanth/Inception_raft_test/smooth_naga/raftmatlabsideview_ARC.m')"
+matlab -nodisplay -nosplash -nodesktop -batch "run('/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/raftmatlabsideview_ARC.m')"
 
 echo "============================================================"
 echo " Job finished at:     $(date)"

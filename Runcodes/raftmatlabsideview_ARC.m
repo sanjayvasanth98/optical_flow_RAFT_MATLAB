@@ -15,6 +15,13 @@ showFigures    = false;   % MUST be false on cluster
 savePlots      = true;    % saves Plot A and Plot B
 skip_animation = true;    % if true, GIF block is skipped
 
+% Resume controls: existing velocity files are NEVER reinitialized.
+% For the first recovery of an OLD run, supply either the exact N from the
+% last "Processed flow frame N/..." line OR that run's SLURM output path.
+% Later restarts use the completion counter automatically.
+legacyCompletedFlowFrames = [];   % e.g. 12345 (NOT the percentage)
+legacyProgressLog = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/RAFT_SideView_599760.out';
+
 % RAFT controls
 raftIters     = 8;
 raftTolerance = 1e-6;
@@ -28,8 +35,8 @@ else
 end
 
 %% --- Calibration parameters ---
-mm_per_pixel = 0.04917372;         % [mm/pixel]   %<--edit
-fps          = 130000;               % [frames per second]  %<--edit
+mm_per_pixel = 0.00828164;          % [mm/pixel]   %<--edit
+fps          = 102247;               % [frames per second]  %<--edit
 m_per_pixel  = mm_per_pixel / 1000;  % [m/pixel]  
 fprintf('Calibration: %.9f m/pixel | Frame rate: %.1f fps\n', m_per_pixel, fps);
 
@@ -47,7 +54,7 @@ end
 try
     %% --- Specify video path ---
     fprintf('\nSTEP 1/7: Opening video...\n');
-    videoPath = '/home/kbsanjayvasanth/Inception_raft_test/smooth_naga/smooth30.avi';   %<--edit
+    videoPath = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/P10S20_3_475_40lpm.avi';   %<--edit
     [filepath, filename, ~] = fileparts(char(videoPath));
 
     if ~isfile(videoPath)
@@ -121,34 +128,115 @@ try
     %% ------------------------------------------------------------
     fprintf('\nSTEP 5/7: Preparing streaming MAT-file (incremental writes)...\n');
     uvFile = fullfile(matDir, [filename '_velocity.mat']);
-    M = matfile(uvFile, 'Writable', true);
+    videoInfo = dir(videoPath);
+    resumeConfig = struct('videoBytes', videoInfo.bytes, ...
+        'videoModified', videoInfo.datenum, 'height', H, 'width', W, ...
+        'numFlowFrames', numFlowFrames, 'raftIters', raftIters, ...
+        'raftTolerance', raftTolerance, 'accelMode', accelMode);
+    completed = 0;
+    if isfile(uvFile)
+        M = matfile(uvFile, 'Writable', true);
+        vars = who(M);
+        required = {'u_all','v_all','mm_per_pixel','m_per_pixel','fps','maskROI'};
+        if ~all(ismember(required, vars))
+            error('Existing velocity file is incomplete. Preserve it and inspect: %s', uvFile);
+        end
+        expectedSize = [H W numFlowFrames];
+        if ~isequal([size(M,'u_all',1) size(M,'u_all',2) size(M,'u_all',3)], expectedSize) || ...
+           ~isequal([size(M,'v_all',1) size(M,'v_all',2) size(M,'v_all',3)], expectedSize)
+            error('Existing velocity dimensions do not match this video: %s', uvFile);
+        end
+        if ~isequal(M.mm_per_pixel, mm_per_pixel) || ~isequal(M.fps, fps) || ...
+           ~isequal(M.m_per_pixel, m_per_pixel) || ~isequal(M.maskROI, maskROI)
+            error('Calibration or ROI changed. Restore the original settings before resuming.');
+        end
+        if ismember('resumeConfig', vars) && ~isequaln(M.resumeConfig, resumeConfig)
+            error('Video or RAFT settings changed. Restore the original settings before resuming.');
+        end
+        if ismember('completedFlowFrames', vars)
+            completed = M.completedFlowFrames;
+        else
+            completed = legacyCompletedFlowFrames;
+            if isempty(completed) && ~isempty(legacyProgressLog)
+                logText = fileread(legacyProgressLog);
+                tokens = regexp(logText, 'Processed flow frame (\d+)/(\d+)', 'tokens');
+                if ~isempty(tokens)
+                    completed = str2double(tokens{end}{1});
+                    if str2double(tokens{end}{2}) ~= numFlowFrames
+                        error('Legacy log frame total does not match this video.');
+                    end
+                end
+            end
+            if isempty(completed)
+                error(['Existing file has no completion counter. Set legacyCompletedFlowFrames ' ...
+                    'to N from the last Processed flow frame N/... log line, or set ' ...
+                    'legacyProgressLog to that job log. Existing data was left untouched.']);
+            end
+            warning(['Recovering an old file using the supplied progress. Ensure it belongs ' ...
+                'to this video and used the same RAFT settings. Saved frames are preserved.']);
+        end
+        validateattributes(completed, {'numeric'}, ...
+            {'scalar','real','finite','integer','>=',0,'<=',numFlowFrames});
+        M.resumeConfig = resumeConfig;
+        M.completedFlowFrames = completed;
+        fprintf('Resuming existing file: %s | %d/%d flow frames saved.\n', ...
+            uvFile, completed, numFlowFrames);
+    else
+        if ~isempty(legacyCompletedFlowFrames) || ~isempty(legacyProgressLog)
+            error('Recovery requested but the existing velocity file was not found: %s', uvFile);
+        end
+        M = matfile(uvFile, 'Writable', true);
+        % Grow arrays on disk without allocating the full video in RAM.
+        M.u_all(H,W,numFlowFrames) = single(0);
+        M.v_all(H,W,numFlowFrames) = single(0);
+        M.mm_per_pixel = mm_per_pixel;
+        M.m_per_pixel = m_per_pixel;
+        M.fps = fps;
+        M.maskROI = maskROI;
+        M.resumeConfig = resumeConfig;
+        M.completedFlowFrames = 0;
+        fprintf('Streaming file created: %s\n', uvFile);
+    end
 
-    % Preallocate on disk (NOT in RAM)
-    M.u_all = zeros(H, W, numFlowFrames, 'single');
-    M.v_all = zeros(H, W, numFlowFrames, 'single');
-
-    % Save constants once
-    M.mm_per_pixel = mm_per_pixel;
-    M.m_per_pixel  = m_per_pixel;
-    M.fps          = fps;
-    M.maskROI      = maskROI;
-
-    fprintf('Streaming file created: %s\n', uvFile);
-
-    %% ------------------------------------------------------------
-    % Running sums for means (memory safe)
-    %% ------------------------------------------------------------
-    sumU   = zeros(H, W, 'double');
-    sumV   = zeros(H, W, 'double');
+    % Reconstruct sums from committed slices, never from unwritten tail zeros.
+    % Using stored singles for both new and recovered frames keeps means consistent.
+    sumU = zeros(H, W, 'double');
+    sumV = zeros(H, W, 'double');
     sumMag = zeros(H, W, 'double');
-    count  = 0;
+    count = completed;
+    for k = 1:completed
+        savedU = double(M.u_all(:,:,k));
+        savedV = double(M.v_all(:,:,k));
+        sumU = sumU + savedU;
+        sumV = sumV + savedV;
+        sumMag = sumMag + hypot(savedU, savedV);
+        if mod(k,200) == 0 || k == completed
+            fprintf('Rebuilding averages: %d/%d saved frames\n', k, completed);
+        end
+    end
+
+    if completed < numFlowFrames
+        % Read sequentially to preserve exact frame numbering, including videos
+        % for which timestamp seeking is imprecise. No RAFT work during skipping.
+        for j = 1:completed
+            framePrev = im2gray(readFrame(v));
+            if mod(j,1000) == 0 || j == completed
+                fprintf('Restoring video position: %d/%d frames\n', j, completed);
+            end
+        end
+        % RAFT caches the previous image internally. Seed it with video frame
+        % completed+1 so the next output is the pair completed+1 -> completed+2.
+        estimateFlow(opticalFlowObj, framePrev, ...
+            ExecutionEnvironment=executionEnv, Acceleration=accelMode, ...
+            MaxIterations=raftIters, Tolerance=raftTolerance);
+    end
 
     %% ------------------------------------------------------------
     % Process frames (write instantaneous frames to disk)
     %% ------------------------------------------------------------
     fprintf('\nSTEP 6/7: Running RAFT per frame (progress will print)...\n');
     tic;
-    for i = 2:numFrames
+    for i = completed+2:numFrames
         frameCurr = im2gray(readFrame(v));
 
         flow = estimateFlow(opticalFlowObj, frameCurr, ...
@@ -169,6 +257,9 @@ try
         k = i - 1;
         M.u_all(:,:,k) = single(u_phys);
         M.v_all(:,:,k) = single(v_phys);
+        % Commit only AFTER both velocity components have been written.
+        % A timeout before this marker causes this pair to be recomputed.
+        M.completedFlowFrames = k;
 
         % --- MEMORY LOGGING (every 200 frames + first frame) ---
         if mod(k, 200) == 0 || k == 1
@@ -189,17 +280,17 @@ try
 
 
         % --- Update running sums for mean (double) ---
-        sumU   = sumU   + double(u_phys);
-        sumV   = sumV   + double(v_phys);
-        sumMag = sumMag + hypot(double(u_phys), double(v_phys));
+        sumU   = sumU   + double(single(u_phys));
+        sumV   = sumV   + double(single(v_phys));
+        sumMag = sumMag + hypot(double(single(u_phys)), double(single(v_phys)));
         count  = count + 1;
 
         % progress
         tElapsed = toc;
-        estTotal = tElapsed / max(k,1) * numFlowFrames;
+        remainingSeconds = tElapsed / (k - completed) * (numFlowFrames - k);
         pct = 100 * k / max(numFlowFrames,1);
         fprintf('Processed flow frame %d/%d (%.1f%%) | Elapsed %.1fs | ETA %.1fs\n', ...
-            k, numFlowFrames, pct, tElapsed, max(estTotal - tElapsed, 0));
+            k, numFlowFrames, pct, tElapsed, max(remainingSeconds, 0));
 
         framePrev = frameCurr;
     end
@@ -239,7 +330,7 @@ try
     M.y_mm         = y_mm;
 
     %% ---------------- Throat profiles (mean-only, disk streaming) -----------
-    fprintf('Computing throat/downstream MEAN profiles (disk streaming)...\n');
+    fprintf('Computing throat/downstream MEAN profiles from accumulated fields...\n');
 
     throatFile = fullfile(filepath, [filename '_throat.mat']);
     if ~isfile(throatFile)
@@ -273,33 +364,12 @@ try
     x_sample_mm = x_mm(ix_throat):x_spacing:x_mm(end);
     ix_samples = arrayfun(@(x) find(abs(x_mm - x) == min(abs(x_mm - x)), 1), x_sample_mm);
 
-    numX = numel(ix_samples);
-    numY = numel(y_mm);
-
-    sumUp   = zeros(numY, numX, 'double');
-    sumVp   = zeros(numY, numX, 'double');
-    sumMagp = zeros(numY, numX, 'double');
-
-    for k = 1:numFlowFrames
-        u_k = M.u_all(:,:,k);
-        v_k = M.v_all(:,:,k);
-
-        u_phys_k = flipud(u_k);
-        v_phys_k = -flipud(v_k);
-
-        for ii = 1:numX
-            xi = ix_samples(ii);
-            uk_col = double(u_phys_k(:, xi));
-            vk_col = double(v_phys_k(:, xi));
-            sumUp(:, ii)   = sumUp(:, ii)   + uk_col;
-            sumVp(:, ii)   = sumVp(:, ii)   + vk_col;
-            sumMagp(:, ii) = sumMagp(:, ii) + hypot(uk_col, vk_col);
-        end
-    end
-
-    u_profiles_mean   = single(sumUp   / numFlowFrames);
-    v_profiles_mean   = single(sumVp   / numFlowFrames);
-    vel_profiles_mean = single(sumMagp / numFlowFrames);
+    % The profiles are column samples of the same means. Reuse the running
+    % sums instead of rereading the entire large velocity file a second time.
+    % Preserve zero values outside the ROI as in the original profile output.
+    u_profiles_mean = single(flipud(sumU(:,ix_samples)) / max(count,1));
+    v_profiles_mean = single(-flipud(sumV(:,ix_samples)) / max(count,1));
+    vel_profiles_mean = single(flipud(sumMag(:,ix_samples)) / max(count,1));
 
     profileFile = fullfile(matDir, [filename '_ThroatProfiles_mean.mat']);
     save(profileFile, ...
@@ -519,6 +589,7 @@ catch ME
     catch
         fprintf(2, 'Error logging failed.\n');
     end
+    rethrow(ME);  % Let MATLAB batch / SLURM report failure.
 end
 
 %% --------------------- helper ---------------------
