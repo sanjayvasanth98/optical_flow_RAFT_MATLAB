@@ -4,6 +4,8 @@
 % Last modified: 2/3/2026
 % Time-averaged velocity + vertical profiles with axes in mm (origin at lower-left)
 % Incremental saving to avoid huge end-of-run save time / RAM blowups
+% New files store u_all/v_all as [nnz(maskROI) x numFlowFrames] singles.
+% Rows follow find(maskROI), in image coordinates; maskROI restores the grid.
 % Saves:
 %   - MAT files into:   <video_folder>/mat files/
 %   - Plots into:       <video_folder>/plots/
@@ -137,7 +139,7 @@ try
     end
 
     %% ------------------------------------------------------------
-    % STREAMING SAVE SETUP (matfile) -> BIG file in "mat files"
+    % STREAMING SAVE SETUP (matfile) -> ROI-only instantaneous values
     %% ------------------------------------------------------------
     fprintf('\nSTEP 5/7: Preparing streaming MAT-file (incremental writes)...\n');
     uvFile = fullfile(matDir, [filename '_velocity.mat']);
@@ -147,6 +149,11 @@ try
         'numFlowFrames', numFlowFrames, 'raftIters', raftIters, ...
         'raftTolerance', raftTolerance, 'accelMode', accelMode, ...
         'contrastMode', contrastMode);
+    numROIPixels = nnz(maskROI);
+    if numROIPixels == 0
+        error('ROI mask must contain at least one pixel.');
+    end
+    roiPacked = true;
     completed = 0;
     if isfile(uvFile)
         M = matfile(uvFile, 'Writable', true);
@@ -155,7 +162,17 @@ try
         if ~all(ismember(required, vars))
             error('Existing velocity file is incomplete. Preserve it and inspect: %s', uvFile);
         end
-        expectedSize = [H W numFlowFrames];
+        % Explicit metadata distinguishes packed arrays, including single-frame
+        % and single-pixel cases, from legacy full-frame arrays.
+        roiPacked = ismember('instantaneousStorage', vars);
+        if roiPacked
+            if ~strcmp(M.instantaneousStorage, 'roi_pixels_by_frame_v1')
+                error('Unknown instantaneous storage format in: %s', uvFile);
+            end
+            expectedSize = [numROIPixels numFlowFrames 1];
+        else
+            expectedSize = [H W numFlowFrames];
+        end
         if ~isequal([size(M,'u_all',1) size(M,'u_all',2) size(M,'u_all',3)], expectedSize) || ...
            ~isequal([size(M,'v_all',1) size(M,'v_all',2) size(M,'v_all',3)], expectedSize)
             error('Existing velocity dimensions do not match this video: %s', uvFile);
@@ -203,6 +220,10 @@ try
         end
         validateattributes(completed, {'numeric'}, ...
             {'scalar','real','finite','integer','>=',0,'<=',numFlowFrames});
+        if ~roiPacked
+            warning(['Resuming legacy full-frame storage. ROI-only storage applies to new ' ...
+                'velocity files; existing files are preserved in their original format.']);
+        end
         M.resumeConfig = resumeConfig;
         M.completedFlowFrames = completed;
         fprintf('Resuming existing file: %s | %d/%d flow frames saved.\n', ...
@@ -213,8 +234,9 @@ try
         end
         M = matfile(uvFile, 'Writable', true);
         % Grow arrays on disk without allocating the full video in RAM.
-        M.u_all(H,W,numFlowFrames) = single(0);
-        M.v_all(H,W,numFlowFrames) = single(0);
+        M.u_all(numROIPixels,numFlowFrames) = single(0);
+        M.v_all(numROIPixels,numFlowFrames) = single(0);
+        M.instantaneousStorage = 'roi_pixels_by_frame_v1';
         M.mm_per_pixel = mm_per_pixel;
         M.m_per_pixel = m_per_pixel;
         M.fps = fps;
@@ -224,6 +246,11 @@ try
         fprintf('Streaming file created: %s\n', uvFile);
     end
 
+    if roiPacked
+        fprintf('ROI-only storage: %d/%d pixels per frame (%.1f%% of full-grid values).\n', ...
+            numROIPixels, H*W, 100*numROIPixels/(H*W));
+    end
+
     % Reconstruct sums from committed slices, never from unwritten tail zeros.
     % Using stored singles for both new and recovered frames keeps means consistent.
     sumU = zeros(H, W, 'double');
@@ -231,11 +258,23 @@ try
     sumMag = zeros(H, W, 'double');
     count = completed;
     for k = 1:completed
-        savedU = double(M.u_all(:,:,k));
-        savedV = double(M.v_all(:,:,k));
-        sumU = sumU + savedU;
-        sumV = sumV + savedV;
-        sumMag = sumMag + hypot(savedU, savedV);
+        if roiPacked
+            savedU = double(M.u_all(:,k));
+            savedV = double(M.v_all(:,k));
+        else
+            if numFlowFrames == 1
+                savedU = double(M.u_all(:,:));
+                savedV = double(M.v_all(:,:));
+            else
+                savedU = double(M.u_all(:,:,k));
+                savedV = double(M.v_all(:,:,k));
+            end
+            savedU = savedU(maskROI);
+            savedV = savedV(maskROI);
+        end
+        sumU(maskROI) = sumU(maskROI) + savedU;
+        sumV(maskROI) = sumV(maskROI) + savedV;
+        sumMag(maskROI) = sumMag(maskROI) + hypot(savedU, savedV);
         if mod(k,200) == 0 || k == completed
             fprintf('Rebuilding averages: %d/%d saved frames\n', k, completed);
         end
@@ -272,18 +311,30 @@ try
             MaxIterations=raftIters, ...
             Tolerance=raftTolerance);
 
-        % ROI mask (image coords)
-        u = flow.Vx .* maskROI;
-        v_ = flow.Vy .* maskROI;
-
-        % Convert to physical velocity (m/s)
-        u_phys = u * m_per_pixel * fps;
-        v_phys = v_ * m_per_pixel * fps;
+        % Extract only ROI pixels in MATLAB linear (column-major) order.
+        % Values remain in image coordinates, calibrated to m/s.
+        u_roi = single(flow.Vx(maskROI) * m_per_pixel * fps);
+        v_roi = single(flow.Vy(maskROI) * m_per_pixel * fps);
 
         % --- Write instantaneous to disk (single) ---
         k = i - 1;
-        M.u_all(:,:,k) = single(u_phys);
-        M.v_all(:,:,k) = single(v_phys);
+        if roiPacked
+            M.u_all(:,k) = u_roi;
+            M.v_all(:,k) = v_roi;
+        else
+            % Preserve the layout when resuming an existing legacy file.
+            u_frame = zeros(H, W, 'single');
+            v_frame = zeros(H, W, 'single');
+            u_frame(maskROI) = u_roi;
+            v_frame(maskROI) = v_roi;
+            if numFlowFrames == 1
+                M.u_all(:,:) = u_frame;
+                M.v_all(:,:) = v_frame;
+            else
+                M.u_all(:,:,k) = u_frame;
+                M.v_all(:,:,k) = v_frame;
+            end
+        end
         % Commit only AFTER both velocity components have been written.
         % A timeout before this marker causes this pair to be recomputed.
         M.completedFlowFrames = k;
@@ -307,9 +358,9 @@ try
 
 
         % --- Update running sums for mean (double) ---
-        sumU   = sumU   + double(single(u_phys));
-        sumV   = sumV   + double(single(v_phys));
-        sumMag = sumMag + hypot(double(single(u_phys)), double(single(v_phys)));
+        sumU(maskROI) = sumU(maskROI) + double(u_roi);
+        sumV(maskROI) = sumV(maskROI) + double(v_roi);
+        sumMag(maskROI) = sumMag(maskROI) + hypot(double(u_roi), double(v_roi));
         count  = count + 1;
 
         % progress

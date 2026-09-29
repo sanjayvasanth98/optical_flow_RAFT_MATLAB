@@ -20,6 +20,7 @@
 % - No temp folders created.
 % - Uses *_velocity.mat produced by your RAFT script:
 %   u_all, v_all, mm_per_pixel, fps, m_per_pixel, maskROI,
+%   Supports full-frame arrays and ROI-only [nnz(maskROI) x Nt] arrays.
 %   (often) x_mm, y_mm, maskROI_phys, u_mean_phys, v_mean_phys, velMean_phys, x_throat_mm
 %
 % Author: Sanjay Vasanth | last edit: 2/17/2026
@@ -267,8 +268,8 @@ for c = 1:numel(infos)
     for k0 = 1:chunkFrames:info.K
         k1 = min(info.K, k0+chunkFrames-1);
 
-        U = info.M.u_all(:,:,k0:k1);
-        V = info.M.v_all(:,:,k0:k1);
+        U = read_velocity_chunk(info.M, info, 'u_all', k0, k1);
+        V = read_velocity_chunk(info.M, info, 'v_all', k0, k1);
 
         U = flipud(U);
         V = -flipud(V);
@@ -354,8 +355,31 @@ M = matfile(matPath);
 wu = whos(M, 'u_all');
 if isempty(wu), error('u_all not found in %s', matPath); end
 sz = wu.size;
-H = sz(1); W = sz(2);
-if numel(sz) >= 3, K = sz(3); else, K = 1; end
+roiPacked = has_var(M, 'instantaneousStorage');
+if roiPacked
+    if ~strcmp(M.instantaneousStorage, 'roi_pixels_by_frame_v1')
+        error('Unknown instantaneous storage format in %s', matPath);
+    end
+    maskROI = logical(M.maskROI);
+    [H, W] = size(maskROI);
+    K = sz(2);
+    if sz(1) ~= nnz(maskROI) || size(M, 'u_all', 3) ~= 1 || ...
+            ~isequal(size(M, 'u_all'), size(M, 'v_all'))
+        error('ROI-only velocity dimensions do not match maskROI in %s', matPath);
+    end
+else
+    H = sz(1); W = sz(2);
+    if numel(sz) >= 3, K = sz(3); else, K = 1; end
+end
+if has_var(M, 'completedFlowFrames')
+    completed = M.completedFlowFrames;
+    validateattributes(completed, {'numeric'}, ...
+        {'scalar','real','finite','integer','>=',0,'<=',K});
+    K = completed;
+end
+if K == 0
+    error('No completed velocity frames in %s', matPath);
+end
 
 mm_per_pixel = M.mm_per_pixel;
 
@@ -388,11 +412,26 @@ info = struct( ...
     'caseName',caseName, ...
     'M',M, ...
     'H',H,'W',W,'K',K, ...
+    'roiPacked',roiPacked,'maskROI',maskROI, ...
     'mm_per_pixel',mm_per_pixel, ...
     'maskROI_phys',maskROI_phys, ...
     'x_mm',x_mm,'y_mm',y_mm, ...
     'y_min_roi_mm',y_min_roi_mm,'y_max_roi_mm',y_max_roi_mm, ...
     'x_throat_mm',x_throat_mm);
+end
+
+function F = read_velocity_chunk(M, info, varName, k0, k1)
+if info.roiPacked
+    % Reconstruct only this chunk, using the saved image-coordinate mask.
+    values = M.(varName)(:,k0:k1);
+    F = zeros(info.H*info.W, k1-k0+1, 'like', values);
+    F(info.maskROI(:),:) = values;
+    F = reshape(F, info.H, info.W, k1-k0+1);
+elseif size(M, varName, 3) == 1
+    F = M.(varName)(:,:);
+else
+    F = M.(varName)(:,:,k0:k1);
+end
 end
 
 function tf = has_var(M, varName)
@@ -428,14 +467,14 @@ for k0 = 1:chunkFrames:info.K
 
     switch which
         case 'u'
-            F = M.u_all(:,:,k0:k1);
+            F = read_velocity_chunk(M, info, 'u_all', k0, k1);
             F = flipud(F);
         case 'v'
-            F = M.v_all(:,:,k0:k1);
+            F = read_velocity_chunk(M, info, 'v_all', k0, k1);
             F = -flipud(F);
         case 'q'
-            U = M.u_all(:,:,k0:k1); U = flipud(U);
-            V = M.v_all(:,:,k0:k1); V = -flipud(V);
+            U = read_velocity_chunk(M, info, 'u_all', k0, k1); U = flipud(U);
+            V = read_velocity_chunk(M, info, 'v_all', k0, k1); V = -flipud(V);
             F = zeros(info.H, info.W, size(U,3), 'like', U);
             for kk = 1:size(U,3)
                 F(:,:,kk) = hypot(U(:,:,kk), V(:,:,kk));
