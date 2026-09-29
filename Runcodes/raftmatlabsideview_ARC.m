@@ -15,12 +15,23 @@ showFigures    = false;   % MUST be false on cluster
 savePlots      = true;    % saves Plot A and Plot B
 skip_animation = true;    % if true, GIF block is skipped
 
+% Same contrast preprocessing as the local runner, on every RAFT input.
+% All results use the standard mat files/ and plots/ folders.
+% For a fresh run, move any existing velocity MAT file out of mat files/ first.
+% Set "none" to resume the original unenhanced video results.
+contrastMode = "clahe";   % "none" or "clahe"
+contrastMode = lower(string(contrastMode));
+if ~isscalar(contrastMode) || ~ismember(contrastMode, ["none", "clahe"])
+    error('contrastMode must be "none" or "clahe".');
+end
+
 % Resume controls: existing velocity files are NEVER reinitialized.
 % For the first recovery of an OLD run, supply either the exact N from the
 % last "Processed flow frame N/..." line OR that run's SLURM output path.
+% These legacy settings apply only to contrastMode="none".
 % Later restarts use the completion counter automatically.
 legacyCompletedFlowFrames = [];   % e.g. 12345 (NOT the percentage)
-legacyProgressLog = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/RAFT_SideView_599760.out';
+legacyProgressLog = '';          % Empty for a new run; set only for legacy recovery.
 
 % RAFT controls
 raftIters     = 8;
@@ -68,10 +79,12 @@ try
     % Create output folders
     %% ------------------------------------------------------------
     fprintf('\nSTEP 2/7: Creating output folders...\n');
-    plotsDir = fullfile(filepath, 'plots');
+    resultsDir = filepath;
+    matDir = fullfile(filepath, 'mat files');
+    fprintf('Contrast preprocessing: %s | Results: %s\n', contrastMode, resultsDir);
+    plotsDir = fullfile(resultsDir, 'plots');
     if ~exist(plotsDir, 'dir'); mkdir(plotsDir); end
 
-    matDir = fullfile(filepath, 'mat files');
     if ~exist(matDir, 'dir'); mkdir(matDir); end
 
     %% ------------------------------------------------------------
@@ -132,7 +145,8 @@ try
     resumeConfig = struct('videoBytes', videoInfo.bytes, ...
         'videoModified', videoInfo.datenum, 'height', H, 'width', W, ...
         'numFlowFrames', numFlowFrames, 'raftIters', raftIters, ...
-        'raftTolerance', raftTolerance, 'accelMode', accelMode);
+        'raftTolerance', raftTolerance, 'accelMode', accelMode, ...
+        'contrastMode', contrastMode);
     completed = 0;
     if isfile(uvFile)
         M = matfile(uvFile, 'Writable', true);
@@ -150,12 +164,24 @@ try
            ~isequal(M.m_per_pixel, m_per_pixel) || ~isequal(M.maskROI, maskROI)
             error('Calibration or ROI changed. Restore the original settings before resuming.');
         end
-        if ismember('resumeConfig', vars) && ~isequaln(M.resumeConfig, resumeConfig)
-            error('Video or RAFT settings changed. Restore the original settings before resuming.');
+        if ismember('resumeConfig', vars)
+            savedConfig = M.resumeConfig;
+            % Previous ARC versions used grayscale without CLAHE.
+            if ~isfield(savedConfig, 'contrastMode')
+                savedConfig.contrastMode = "none";
+            end
+            if ~isequaln(savedConfig, resumeConfig)
+                error('Video, RAFT, or contrast settings changed. Restore the original settings before resuming.');
+            end
+        elseif contrastMode ~= "none"
+            error('Existing file has no contrast metadata; cannot resume it as a CLAHE run.');
         end
         if ismember('completedFlowFrames', vars)
             completed = M.completedFlowFrames;
         else
+            if contrastMode ~= "none"
+                error('CLAHE file is missing its completion counter. Inspect it before resuming.');
+            end
             completed = legacyCompletedFlowFrames;
             if isempty(completed) && ~isempty(legacyProgressLog)
                 logText = fileread(legacyProgressLog);
@@ -182,7 +208,7 @@ try
         fprintf('Resuming existing file: %s | %d/%d flow frames saved.\n', ...
             uvFile, completed, numFlowFrames);
     else
-        if ~isempty(legacyCompletedFlowFrames) || ~isempty(legacyProgressLog)
+        if contrastMode == "none" && (~isempty(legacyCompletedFlowFrames) || ~isempty(legacyProgressLog))
             error('Recovery requested but the existing velocity file was not found: %s', uvFile);
         end
         M = matfile(uvFile, 'Writable', true);
@@ -226,6 +252,7 @@ try
         end
         % RAFT caches the previous image internally. Seed it with video frame
         % completed+1 so the next output is the pair completed+1 -> completed+2.
+        framePrev = prepareFrame(framePrev, contrastMode);
         estimateFlow(opticalFlowObj, framePrev, ...
             ExecutionEnvironment=executionEnv, Acceleration=accelMode, ...
             MaxIterations=raftIters, Tolerance=raftTolerance);
@@ -237,7 +264,7 @@ try
     fprintf('\nSTEP 6/7: Running RAFT per frame (progress will print)...\n');
     tic;
     for i = completed+2:numFrames
-        frameCurr = im2gray(readFrame(v));
+        frameCurr = prepareFrame(readFrame(v), contrastMode);
 
         flow = estimateFlow(opticalFlowObj, frameCurr, ...
             ExecutionEnvironment=executionEnv, ...
@@ -595,4 +622,12 @@ end
 %% --------------------- helper ---------------------
 function out = tern(cond, a, b)
 if cond, out = a; else, out = b; end
+end
+
+% Keep this preprocessing identical to raftmatlabsideview_local.m.
+function frame = prepareFrame(frame, contrastMode)
+frame = im2gray(frame);
+if contrastMode == "clahe"
+    frame = adapthisteq(frame);
+end
 end

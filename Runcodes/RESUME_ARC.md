@@ -3,7 +3,7 @@
 Use `Runcodes/raftmatlabsideview_ARC.m` and keep the existing
 `<video folder>/mat files/<video name>_velocity.mat` in place.
 
-1. Set `videoPath` to the same video. Keep the original calibration, ROI, and RAFT settings.
+1. Set `contrastMode = "none"` to recover the original run. Set `videoPath` to the same video. Keep the original calibration, ROI, and RAFT settings.
 2. For an old run without a completion counter, set `legacyProgressLog` near the top
    of the script to the interrupted job's `RAFT_SideView_<job id>.out` file.
    Alternatively, set `legacyCompletedFlowFrames` to the exact **N** in the last
@@ -31,3 +31,18 @@ Recovery requires a readable velocity MAT file and a log/count from the matching
 run. The old file has no video identity or RAFT settings record, so those must be
 checked by the operator on its first recovery. New runs record settings and video
 size/modification time and reject mismatches. Run only one job per output file.
+
+## CLAHE runs
+
+`contrastMode = "clahe"` is now the default, matching the local runner's
+`im2gray` followed by `adapthisteq` with default settings. Both the reference
+frame used to initialize RAFT and each subsequent input receive this preprocessing.
+All runs save to `mat files/` and `plots/` inside the video folder, regardless
+of contrast mode. For a fresh run of the same video, move the old velocity MAT
+file out of `mat files/` first. Derived MAT files and plots with matching names
+are replaced when the new run generates its outputs.
+
+A new CLAHE run processes the entire video; it cannot reuse the old 97% flow
+results. Legacy log/count settings are ignored when creating a CLAHE run.
+Interrupted CLAHE runs resume from their own completion counter and saved
+contrast metadata. The existing ROI and throat files are still used.
