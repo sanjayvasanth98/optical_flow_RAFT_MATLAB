@@ -22,6 +22,8 @@ skip_animation = true;    % if true, GIF block is skipped
 % For a fresh run, move any existing velocity MAT file out of mat files/ first.
 % Set "none" to resume the original unenhanced video results.
 contrastMode = "clahe";   % "none" or "clahe"
+% Fresh CLAHE runs use MATLAB's built-in interpolation between tiles.
+claheImplementation = "cpu_adapthisteq_v1";
 contrastMode = lower(string(contrastMode));
 if ~isscalar(contrastMode) || ~ismember(contrastMode, ["none", "clahe"])
     error('contrastMode must be "none" or "clahe".');
@@ -148,7 +150,8 @@ try
         'videoModified', videoInfo.datenum, 'height', H, 'width', W, ...
         'numFlowFrames', numFlowFrames, 'raftIters', raftIters, ...
         'raftTolerance', raftTolerance, 'accelMode', accelMode, ...
-        'contrastMode', contrastMode);
+        'contrastMode', contrastMode, 'claheImplementation', ...
+        tern(contrastMode == "clahe", claheImplementation, "none"));
     numROIPixels = nnz(maskROI);
     if numROIPixels == 0
         error('ROI mask must contain at least one pixel.');
@@ -187,6 +190,20 @@ try
             if ~isfield(savedConfig, 'contrastMode')
                 savedConfig.contrastMode = "none";
             end
+            if ~isfield(savedConfig, 'claheImplementation')
+                % Preserve the preprocessing used by files created before this field existed.
+                if savedConfig.contrastMode == "clahe"
+                    if canUseGPU
+                        savedConfig.claheImplementation = "gpu_tiles_v1";
+                    else
+                        savedConfig.claheImplementation = "cpu_adapthisteq_v1";
+                    end
+                else
+                    savedConfig.claheImplementation = "none";
+                end
+            end
+            claheImplementation = savedConfig.claheImplementation;
+            resumeConfig.claheImplementation = claheImplementation;
             if ~isequaln(savedConfig, resumeConfig)
                 error('Video, RAFT, or contrast settings changed. Restore the original settings before resuming.');
             end
@@ -246,6 +263,8 @@ try
         fprintf('Streaming file created: %s\n', uvFile);
     end
 
+    fprintf('CLAHE implementation: %s (RAFT: %s)\n', ...
+        resumeConfig.claheImplementation, executionEnv);
     if roiPacked
         fprintf('ROI-only storage: %d/%d pixels per frame (%.1f%% of full-grid values).\n', ...
             numROIPixels, H*W, 100*numROIPixels/(H*W));
@@ -291,7 +310,7 @@ try
         end
         % RAFT caches the previous image internally. Seed it with video frame
         % completed+1 so the next output is the pair completed+1 -> completed+2.
-        framePrev = prepareFrame(framePrev, contrastMode);
+        framePrev = prepareFrame(framePrev, contrastMode, claheImplementation);
         estimateFlow(opticalFlowObj, framePrev, ...
             ExecutionEnvironment=executionEnv, Acceleration=accelMode, ...
             MaxIterations=raftIters, Tolerance=raftTolerance);
@@ -303,13 +322,28 @@ try
     fprintf('\nSTEP 6/7: Running RAFT per frame (progress will print)...\n');
     tic;
     for i = completed+2:numFrames
-        frameCurr = prepareFrame(readFrame(v), contrastMode);
+        k = i - 1;
+        profileFrame = k <= completed + 5 || mod(k, 200) == 0;
+        if profileFrame, stageClock = tic; end
+        rawFrame = readFrame(v);
+        if profileFrame, readSeconds = toc(stageClock); stageClock = tic; end
+        frameCurr = prepareFrame(rawFrame, contrastMode, claheImplementation);
+        if profileFrame
+            if executionEnv == "gpu", wait(gpuDevice); end
+            claheSeconds = toc(stageClock);
+            stageClock = tic;
+        end
 
         flow = estimateFlow(opticalFlowObj, frameCurr, ...
             ExecutionEnvironment=executionEnv, ...
             Acceleration=accelMode, ...
             MaxIterations=raftIters, ...
             Tolerance=raftTolerance);
+        if profileFrame
+            if executionEnv == "gpu", wait(gpuDevice); end
+            raftSeconds = toc(stageClock);
+            stageClock = tic;
+        end
 
         % Extract only ROI pixels in MATLAB linear (column-major) order.
         % Values remain in image coordinates, calibrated to m/s.
@@ -317,7 +351,6 @@ try
         v_roi = single(flow.Vy(maskROI) * m_per_pixel * fps);
 
         % --- Write instantaneous to disk (single) ---
-        k = i - 1;
         if roiPacked
             M.u_all(:,k) = u_roi;
             M.v_all(:,k) = v_roi;
@@ -338,6 +371,7 @@ try
         % Commit only AFTER both velocity components have been written.
         % A timeout before this marker causes this pair to be recomputed.
         M.completedFlowFrames = k;
+        if profileFrame, writeSeconds = toc(stageClock); end
 
         % --- MEMORY LOGGING (every 200 frames + first frame) ---
         if mod(k, 200) == 0 || k == 1
@@ -358,10 +392,16 @@ try
 
 
         % --- Update running sums for mean (double) ---
+        if profileFrame, stageClock = tic; end
         sumU(maskROI) = sumU(maskROI) + double(u_roi);
         sumV(maskROI) = sumV(maskROI) + double(v_roi);
         sumMag(maskROI) = sumMag(maskROI) + hypot(double(u_roi), double(v_roi));
         count  = count + 1;
+        if profileFrame
+            meanSeconds = toc(stageClock);
+            fprintf('[PROFILE] frame %d | read %.3fs | CLAHE %.3fs | RAFT %.3fs | write %.3fs | mean %.3fs\n', ...
+                k, readSeconds, claheSeconds, raftSeconds, writeSeconds, meanSeconds);
+        end
 
         % progress
         tElapsed = toc;
@@ -675,14 +715,16 @@ function out = tern(cond, a, b)
 if cond, out = a; else, out = b; end
 end
 
-% Keep this preprocessing identical to raftmatlabsideview_local.m.
-function frame = prepareFrame(frame, contrastMode)
+% Fresh runs match the local runner; legacy GPU runs retain their original transform.
+function frame = prepareFrame(frame, contrastMode, claheImplementation)
 frame = im2gray(frame);
 if contrastMode == "clahe"
-    if canUseGPU
-        frame = gpuClahe(frame);
-    else
+    if claheImplementation == "gpu_tiles_v1"
+        frame = gpuClahe(frame);  % Required when resuming an older GPU run.
+    elseif claheImplementation == "cpu_adapthisteq_v1"
         frame = adapthisteq(frame);
+    else
+        error('Unknown CLAHE implementation: %s', claheImplementation);
     end
 end
 end
