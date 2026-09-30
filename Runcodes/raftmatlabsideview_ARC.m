@@ -56,7 +56,8 @@ m_per_pixel  = mm_per_pixel / 1000;  % [m/pixel]
 fprintf('Calibration: %.9f m/pixel | Frame rate: %.1f fps\n', m_per_pixel, fps);
 
 %% --- Load your personal toolbox path safely ---
-fprintf('\nSTEP 0/7: Loading custom MATLAB path (if available)...\n');
+fprintf('\n[%s] STEP 0/7: Loading custom MATLAB path (if available)...\n', ...
+    datestr(now, 'yyyy-mm-dd HH:MM:SS'));
 userPathFile = fullfile(getenv('HOME'), 'matlab', 'pathdef.m');
 if isfile(userPathFile)
     addpath(genpath(fileparts(userPathFile)));
@@ -68,7 +69,7 @@ end
 
 try
     %% --- Specify video path ---
-    fprintf('\nSTEP 1/7: Opening video...\n');
+    fprintf('\n[%s] STEP 1/7: Opening video...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     videoPath = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/P10S20_3_475_40lpm.avi';   %<--edit
     [filepath, filename, ~] = fileparts(char(videoPath));
 
@@ -82,7 +83,7 @@ try
     %% ------------------------------------------------------------
     % Create output folders
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 2/7: Creating output folders...\n');
+    fprintf('\n[%s] STEP 2/7: Creating output folders...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     resultsDir = filepath;
     matDir = fullfile(filepath, 'mat files');
     fprintf('Contrast preprocessing: %s | Results: %s\n', contrastMode, resultsDir);
@@ -94,7 +95,7 @@ try
     %% ------------------------------------------------------------
     % ROI (CLUSTER SAFE): MUST already exist
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 3/7: Loading ROI (non-interactive)...\n');
+    fprintf('\n[%s] STEP 3/7: Loading ROI (non-interactive)...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     roiFile = fullfile(filepath, [filename '_ROI.mat']);
 
     if isfile(roiFile)
@@ -118,7 +119,7 @@ try
     %% ------------------------------------------------------------
     % Optical Flow Setup (RAFT)
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 4/7: Initializing RAFT Optical Flow...\n');
+    fprintf('\n[%s] STEP 4/7: Initializing RAFT Optical Flow...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     opticalFlowObj = opticalFlowRAFT;
 
     % Robust frame count estimate
@@ -143,7 +144,8 @@ try
     %% ------------------------------------------------------------
     % STREAMING SAVE SETUP (matfile) -> ROI-only instantaneous values
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 5/7: Preparing streaming MAT-file (incremental writes)...\n');
+    fprintf('\n[%s] STEP 5/7: Preparing streaming MAT-file (incremental writes)...\n', ...
+        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     uvFile = fullfile(matDir, [filename '_velocity.mat']);
     videoInfo = dir(videoPath);
     resumeConfig = struct('videoBytes', videoInfo.bytes, ...
@@ -319,7 +321,8 @@ try
     %% ------------------------------------------------------------
     % Process frames (write instantaneous frames to disk)
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 6/7: Running RAFT per frame (progress will print)...\n');
+    fprintf('\n[%s] STEP 6/7: Running RAFT per frame (progress will print)...\n', ...
+        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     tic;
     for i = completed+2:numFrames
         k = i - 1;
@@ -407,8 +410,8 @@ try
         tElapsed = toc;
         remainingSeconds = tElapsed / (k - completed) * (numFlowFrames - k);
         pct = 100 * k / max(numFlowFrames,1);
-        fprintf('Processed flow frame %d/%d (%.1f%%) | Elapsed %.1fs | ETA %.1fs\n', ...
-            k, numFlowFrames, pct, tElapsed, max(remainingSeconds, 0));
+        fprintf('[%s] Processed flow frame %d/%d (%.1f%%) | Elapsed %.1fs | ETA %.1fs\n', ...
+            datestr(now, 'yyyy-mm-dd HH:MM:SS'), k, numFlowFrames, pct, tElapsed, max(remainingSeconds, 0));
 
         framePrev = frameCurr;
     end
@@ -417,7 +420,8 @@ try
     %% ------------------------------------------------------------
     % Means
     %% ------------------------------------------------------------
-    fprintf('\nSTEP 7/7: Computing mean fields + saving small outputs + plots...\n');
+    fprintf('\n[%s] STEP 7/7: Computing mean fields + saving small outputs + plots...\n', ...
+        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     u_mean  = single(sumU   / max(count,1));
     v_mean  = single(sumV   / max(count,1));
     velMean = single(sumMag / max(count,1));
@@ -668,7 +672,7 @@ try
     end
 
     %% --------------------- FINAL SUMMARY --------------------------
-    fprintf('\nDONE.\n');
+    fprintf('\n[%s] DONE.\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
     fprintf('Instantaneous frames: SAVED incrementally to %s (u_all, v_all)\n', uvFile);
     fprintf('Folders:\n  MAT:   %s\n  Plots: %s\n', matDir, plotsDir);
 
