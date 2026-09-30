@@ -283,6 +283,39 @@ end
 function frame = prepareFrame(frame, contrastMode)
 frame = im2gray(frame);
 if contrastMode == "clahe"
-    frame = adapthisteq(frame);
+    if canUseGPU
+        frame = gpuClahe(frame);
+    else
+        frame = adapthisteq(frame);
+    end
 end
+end
+
+function frame = gpuClahe(frame)
+frameGPU = gpuArray(im2single(frame));
+[height, width] = size(frameGPU);
+numTileRows = min(8, height);
+numTileCols = min(8, width);
+outputGPU = zeros(height, width, 'like', frameGPU);
+
+for tileRow = 1:numTileRows
+    rowStart = floor((tileRow - 1) * height / numTileRows) + 1;
+    rowEnd = floor(tileRow * height / numTileRows);
+    for tileCol = 1:numTileCols
+        colStart = floor((tileCol - 1) * width / numTileCols) + 1;
+        colEnd = floor(tileCol * width / numTileCols);
+        tileGPU = frameGPU(rowStart:rowEnd, colStart:colEnd);
+
+        [histogramGPU, ~] = histcounts(tileGPU, 256, 'BinLimits', [0 1]);
+        clipLimit = max(1, 0.01 * numel(tileGPU) / 256);
+        excess = sum(max(histogramGPU - clipLimit, 0));
+        histogramGPU = min(histogramGPU, clipLimit) + excess / 256;
+        cdfGPU = cumsum(histogramGPU) / numel(tileGPU);
+
+        binGPU = min(floor(tileGPU * 256) + 1, 256);
+        outputGPU(rowStart:rowEnd, colStart:colEnd) = cdfGPU(binGPU);
+    end
+end
+
+frame = gather(im2uint8(outputGPU));
 end
