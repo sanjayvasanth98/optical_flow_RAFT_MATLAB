@@ -1,12 +1,13 @@
 #!/bin/bash
 #SBATCH --output=RAFT_SideView_%j.out
 #SBATCH --error=RAFT_SideView_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=12:00:00
 #SBATCH --account=cavitation
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:1
+#SBATCH --gres-flags=disable-binding
 #SBATCH --mem=8G
 #SBATCH --partition=a30_normal_q
 #SBATCH --mail-type=BEGIN,END,FAIL

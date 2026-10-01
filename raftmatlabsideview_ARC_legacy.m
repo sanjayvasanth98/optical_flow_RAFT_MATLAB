@@ -1,41 +1,19 @@
 %% ------------------------------------------------------------
-% Optical Flow RAFT
+% Optical Flow RAFT (CLUSTER-SAFE, NO INTERACTIVE ROI)
 % Author: Sanjay Vasanth
 % Last modified: 2/3/2026
-% Time-averaged velocity + vertical profiles with axes in mm (origin at lower-left)
+%
 % Incremental saving to avoid huge end-of-run save time / RAM blowups
-% New files store u_all/v_all as [nnz(maskROI) x numFlowFrames] singles.
-% Rows follow find(maskROI), in image coordinates; maskROI restores the grid.
 % Saves:
 %   - MAT files into:   <video_folder>/mat files/
 %   - Plots into:       <video_folder>/plots/
-%% ------------------------------------------------------------
+% ------------------------------------------------------------
 clear all; clc; close all;
 
 %% --------------------- USER TOGGLES --------------------------
 showFigures    = false;   % MUST be false on cluster
 savePlots      = true;    % saves Plot A and Plot B
 skip_animation = true;    % if true, GIF block is skipped
-
-% Same contrast preprocessing as the local runner, on every RAFT input.
-% All results use the standard mat files/ and plots/ folders.
-% For a fresh run, move any existing velocity MAT file out of mat files/ first.
-% Set "none" to resume the original unenhanced video results.
-contrastMode = "clahe";   % "none" or "clahe"
-% Fresh CLAHE runs use MATLAB's built-in interpolation between tiles.
-claheImplementation = "cpu_adapthisteq_v1";
-contrastMode = lower(string(contrastMode));
-if ~isscalar(contrastMode) || ~ismember(contrastMode, ["none", "clahe"])
-    error('contrastMode must be "none" or "clahe".');
-end
-
-% Resume controls: existing velocity files are NEVER reinitialized.
-% For the first recovery of an OLD run, supply either the exact N from the
-% last "Processed flow frame N/..." line OR that run's SLURM output path.
-% These legacy settings apply only to contrastMode="none".
-% Later restarts use the completion counter automatically.
-legacyCompletedFlowFrames = [];   % e.g. 12345 (NOT the percentage)
-legacyProgressLog = '';          % Empty for a new run; set only for legacy recovery.
 
 % RAFT controls
 raftIters     = 8;
@@ -50,14 +28,13 @@ else
 end
 
 %% --- Calibration parameters ---
-mm_per_pixel = 0.00828164;          % [mm/pixel]   %<--edit
-fps          = 102247;               % [frames per second]  %<--edit
-m_per_pixel  = mm_per_pixel / 1000;  % [m/pixel]  
+mm_per_pixel = 0.00828164;         % [mm/pixel]
+fps          = 102247;               % [frames per second]
+m_per_pixel  = mm_per_pixel / 1000;  % [m/pixel]
 fprintf('Calibration: %.9f m/pixel | Frame rate: %.1f fps\n', m_per_pixel, fps);
 
 %% --- Load your personal toolbox path safely ---
-fprintf('\n[%s] STEP 0/7: Loading custom MATLAB path (if available)...\n', ...
-    datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+fprintf('\nSTEP 0/7: Loading custom MATLAB path (if available)...\n');
 userPathFile = fullfile(getenv('HOME'), 'matlab', 'pathdef.m');
 if isfile(userPathFile)
     addpath(genpath(fileparts(userPathFile)));
@@ -69,8 +46,8 @@ end
 
 try
     %% --- Specify video path ---
-    fprintf('\n[%s] STEP 1/7: Opening video...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
-    videoPath = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/P10S20_3_475_40lpm.avi';   %<--edit
+    fprintf('\nSTEP 1/7: Opening video...\n');
+    videoPath = '/home/kbsanjayvasanth/Sept2026_flowfield_RAFT/P10S20/P10S20_3_475_40lpm.avi';
     [filepath, filename, ~] = fileparts(char(videoPath));
 
     if ~isfile(videoPath)
@@ -83,19 +60,17 @@ try
     %% ------------------------------------------------------------
     % Create output folders
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 2/7: Creating output folders...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
-    resultsDir = filepath;
-    matDir = fullfile(filepath, 'mat files');
-    fprintf('Contrast preprocessing: %s | Results: %s\n', contrastMode, resultsDir);
-    plotsDir = fullfile(resultsDir, 'plots');
+    fprintf('\nSTEP 2/7: Creating output folders...\n');
+    plotsDir = fullfile(filepath, 'plots');
     if ~exist(plotsDir, 'dir'); mkdir(plotsDir); end
 
+    matDir = fullfile(filepath, 'mat files');
     if ~exist(matDir, 'dir'); mkdir(matDir); end
 
     %% ------------------------------------------------------------
     % ROI (CLUSTER SAFE): MUST already exist
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 3/7: Loading ROI (non-interactive)...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nSTEP 3/7: Loading ROI (non-interactive)...\n');
     roiFile = fullfile(filepath, [filename '_ROI.mat']);
 
     if isfile(roiFile)
@@ -119,7 +94,7 @@ try
     %% ------------------------------------------------------------
     % Optical Flow Setup (RAFT)
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 4/7: Initializing RAFT Optical Flow...\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nSTEP 4/7: Initializing RAFT Optical Flow...\n');
     opticalFlowObj = opticalFlowRAFT;
 
     % Robust frame count estimate
@@ -142,235 +117,58 @@ try
     end
 
     %% ------------------------------------------------------------
-    % STREAMING SAVE SETUP (matfile) -> ROI-only instantaneous values
+    % STREAMING SAVE SETUP (matfile) -> BIG file in "mat files"
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 5/7: Preparing streaming MAT-file (incremental writes)...\n', ...
-        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nSTEP 5/7: Preparing streaming MAT-file (incremental writes)...\n');
     uvFile = fullfile(matDir, [filename '_velocity.mat']);
-    videoInfo = dir(videoPath);
-    resumeConfig = struct('videoBytes', videoInfo.bytes, ...
-        'videoModified', videoInfo.datenum, 'height', H, 'width', W, ...
-        'numFlowFrames', numFlowFrames, 'raftIters', raftIters, ...
-        'raftTolerance', raftTolerance, 'accelMode', accelMode, ...
-        'contrastMode', contrastMode, 'claheImplementation', ...
-        tern(contrastMode == "clahe", claheImplementation, "none"));
-    numROIPixels = nnz(maskROI);
-    if numROIPixels == 0
-        error('ROI mask must contain at least one pixel.');
-    end
-    roiPacked = true;
-    completed = 0;
-    if isfile(uvFile)
-        M = matfile(uvFile, 'Writable', true);
-        vars = who(M);
-        required = {'u_all','v_all','mm_per_pixel','m_per_pixel','fps','maskROI'};
-        if ~all(ismember(required, vars))
-            error('Existing velocity file is incomplete. Preserve it and inspect: %s', uvFile);
-        end
-        % Explicit metadata distinguishes packed arrays, including single-frame
-        % and single-pixel cases, from legacy full-frame arrays.
-        roiPacked = ismember('instantaneousStorage', vars);
-        if roiPacked
-            if ~strcmp(M.instantaneousStorage, 'roi_pixels_by_frame_v1')
-                error('Unknown instantaneous storage format in: %s', uvFile);
-            end
-            expectedSize = [numROIPixels numFlowFrames 1];
-        else
-            expectedSize = [H W numFlowFrames];
-        end
-        if ~isequal([size(M,'u_all',1) size(M,'u_all',2) size(M,'u_all',3)], expectedSize) || ...
-           ~isequal([size(M,'v_all',1) size(M,'v_all',2) size(M,'v_all',3)], expectedSize)
-            error('Existing velocity dimensions do not match this video: %s', uvFile);
-        end
-        if ~isequal(M.mm_per_pixel, mm_per_pixel) || ~isequal(M.fps, fps) || ...
-           ~isequal(M.m_per_pixel, m_per_pixel) || ~isequal(M.maskROI, maskROI)
-            error('Calibration or ROI changed. Restore the original settings before resuming.');
-        end
-        if ismember('resumeConfig', vars)
-            savedConfig = M.resumeConfig;
-            % Previous ARC versions used grayscale without CLAHE.
-            if ~isfield(savedConfig, 'contrastMode')
-                savedConfig.contrastMode = "none";
-            end
-            if ~isfield(savedConfig, 'claheImplementation')
-                % Preserve the preprocessing used by files created before this field existed.
-                if savedConfig.contrastMode == "clahe"
-                    savedConfig.claheImplementation = "cpu_adapthisteq_v1";
-                else
-                    savedConfig.claheImplementation = "none";
-                end
-            end
-            claheImplementation = savedConfig.claheImplementation;
-            resumeConfig.claheImplementation = claheImplementation;
-            if ~isequaln(savedConfig, resumeConfig)
-                error('Video, RAFT, or contrast settings changed. Restore the original settings before resuming.');
-            end
-        elseif contrastMode ~= "none"
-            error('Existing file has no contrast metadata; cannot resume it as a CLAHE run.');
-        end
-        if ismember('completedFlowFrames', vars)
-            completed = M.completedFlowFrames;
-        else
-            if contrastMode ~= "none"
-                error('CLAHE file is missing its completion counter. Inspect it before resuming.');
-            end
-            completed = legacyCompletedFlowFrames;
-            if isempty(completed) && ~isempty(legacyProgressLog)
-                logText = fileread(legacyProgressLog);
-                tokens = regexp(logText, 'Processed flow frame (\d+)/(\d+)', 'tokens');
-                if ~isempty(tokens)
-                    completed = str2double(tokens{end}{1});
-                    if str2double(tokens{end}{2}) ~= numFlowFrames
-                        error('Legacy log frame total does not match this video.');
-                    end
-                end
-            end
-            if isempty(completed)
-                error(['Existing file has no completion counter. Set legacyCompletedFlowFrames ' ...
-                    'to N from the last Processed flow frame N/... log line, or set ' ...
-                    'legacyProgressLog to that job log. Existing data was left untouched.']);
-            end
-            warning(['Recovering an old file using the supplied progress. Ensure it belongs ' ...
-                'to this video and used the same RAFT settings. Saved frames are preserved.']);
-        end
-        validateattributes(completed, {'numeric'}, ...
-            {'scalar','real','finite','integer','>=',0,'<=',numFlowFrames});
-        if ~roiPacked
-            warning(['Resuming legacy full-frame storage. ROI-only storage applies to new ' ...
-                'velocity files; existing files are preserved in their original format.']);
-        end
-        M.resumeConfig = resumeConfig;
-        M.completedFlowFrames = completed;
-        fprintf('Resuming existing file: %s | %d/%d flow frames saved.\n', ...
-            uvFile, completed, numFlowFrames);
-    else
-        if contrastMode == "none" && (~isempty(legacyCompletedFlowFrames) || ~isempty(legacyProgressLog))
-            error('Recovery requested but the existing velocity file was not found: %s', uvFile);
-        end
-        M = matfile(uvFile, 'Writable', true);
-        % Grow arrays on disk without allocating the full video in RAM.
-        M.u_all(numROIPixels,numFlowFrames) = single(0);
-        M.v_all(numROIPixels,numFlowFrames) = single(0);
-        M.instantaneousStorage = 'roi_pixels_by_frame_v1';
-        M.mm_per_pixel = mm_per_pixel;
-        M.m_per_pixel = m_per_pixel;
-        M.fps = fps;
-        M.maskROI = maskROI;
-        M.resumeConfig = resumeConfig;
-        M.completedFlowFrames = 0;
-        fprintf('Streaming file created: %s\n', uvFile);
-    end
+    M = matfile(uvFile, 'Writable', true);
 
-    fprintf('CLAHE implementation: %s (RAFT: %s)\n', ...
-        resumeConfig.claheImplementation, executionEnv);
-    if roiPacked
-        fprintf('ROI-only storage: %d/%d pixels per frame (%.1f%% of full-grid values).\n', ...
-            numROIPixels, H*W, 100*numROIPixels/(H*W));
-    end
+    % Preallocate on disk (NOT in RAM)
+    M.u_all = zeros(H, W, numFlowFrames, 'single');
+    M.v_all = zeros(H, W, numFlowFrames, 'single');
 
-    % Reconstruct sums from committed slices, never from unwritten tail zeros.
-    % Using stored singles for both new and recovered frames keeps means consistent.
-    sumU = zeros(H, W, 'double');
-    sumV = zeros(H, W, 'double');
+    % Save constants once
+    M.mm_per_pixel = mm_per_pixel;
+    M.m_per_pixel  = m_per_pixel;
+    M.fps          = fps;
+    M.maskROI      = maskROI;
+
+    fprintf('Streaming file created: %s\n', uvFile);
+
+    %% ------------------------------------------------------------
+    % Running sums for means (memory safe)
+    %% ------------------------------------------------------------
+    sumU   = zeros(H, W, 'double');
+    sumV   = zeros(H, W, 'double');
     sumMag = zeros(H, W, 'double');
-    count = completed;
-    for k = 1:completed
-        if roiPacked
-            savedU = double(M.u_all(:,k));
-            savedV = double(M.v_all(:,k));
-        else
-            if numFlowFrames == 1
-                savedU = double(M.u_all(:,:));
-                savedV = double(M.v_all(:,:));
-            else
-                savedU = double(M.u_all(:,:,k));
-                savedV = double(M.v_all(:,:,k));
-            end
-            savedU = savedU(maskROI);
-            savedV = savedV(maskROI);
-        end
-        sumU(maskROI) = sumU(maskROI) + savedU;
-        sumV(maskROI) = sumV(maskROI) + savedV;
-        sumMag(maskROI) = sumMag(maskROI) + hypot(savedU, savedV);
-        if mod(k,200) == 0 || k == completed
-            fprintf('Rebuilding averages: %d/%d saved frames\n', k, completed);
-        end
-    end
-
-    if completed < numFlowFrames
-        % Read sequentially to preserve exact frame numbering, including videos
-        % for which timestamp seeking is imprecise. No RAFT work during skipping.
-        for j = 1:completed
-            framePrev = im2gray(readFrame(v));
-            if mod(j,1000) == 0 || j == completed
-                fprintf('Restoring video position: %d/%d frames\n', j, completed);
-            end
-        end
-        % RAFT caches the previous image internally. Seed it with video frame
-        % completed+1 so the next output is the pair completed+1 -> completed+2.
-        framePrev = prepareFrame(framePrev, contrastMode, claheImplementation);
-        estimateFlow(opticalFlowObj, framePrev, ...
-            ExecutionEnvironment=executionEnv, Acceleration=accelMode, ...
-            MaxIterations=raftIters, Tolerance=raftTolerance);
-    end
+    count  = 0;
 
     %% ------------------------------------------------------------
     % Process frames (write instantaneous frames to disk)
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 6/7: Running RAFT per frame (progress will print)...\n', ...
-        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nSTEP 6/7: Running RAFT per frame (progress will print)...\n');
     tic;
-    for i = completed+2:numFrames
-        k = i - 1;
-        profileFrame = k <= completed + 5 || mod(k, 200) == 0;
-        if profileFrame, stageClock = tic; end
-        rawFrame = readFrame(v);
-        if profileFrame, readSeconds = toc(stageClock); stageClock = tic; end
-        frameCurr = prepareFrame(rawFrame, contrastMode, claheImplementation);
-        if profileFrame
-            if executionEnv == "gpu", wait(gpuDevice); end
-            claheSeconds = toc(stageClock);
-            stageClock = tic;
-        end
+    for i = 2:numFrames
+        frameCurr = im2gray(readFrame(v));
 
         flow = estimateFlow(opticalFlowObj, frameCurr, ...
             ExecutionEnvironment=executionEnv, ...
             Acceleration=accelMode, ...
             MaxIterations=raftIters, ...
             Tolerance=raftTolerance);
-        if profileFrame
-            if executionEnv == "gpu", wait(gpuDevice); end
-            raftSeconds = toc(stageClock);
-            stageClock = tic;
-        end
 
-        % Extract only ROI pixels in MATLAB linear (column-major) order.
-        % Values remain in image coordinates, calibrated to m/s.
-        u_roi = single(flow.Vx(maskROI) * m_per_pixel * fps);
-        v_roi = single(flow.Vy(maskROI) * m_per_pixel * fps);
+        % ROI mask (image coords)
+        u = flow.Vx .* maskROI;
+        v_ = flow.Vy .* maskROI;
+
+        % Convert to physical velocity (m/s)
+        u_phys = u * m_per_pixel * fps;
+        v_phys = v_ * m_per_pixel * fps;
 
         % --- Write instantaneous to disk (single) ---
-        if roiPacked
-            M.u_all(:,k) = u_roi;
-            M.v_all(:,k) = v_roi;
-        else
-            % Preserve the layout when resuming an existing legacy file.
-            u_frame = zeros(H, W, 'single');
-            v_frame = zeros(H, W, 'single');
-            u_frame(maskROI) = u_roi;
-            v_frame(maskROI) = v_roi;
-            if numFlowFrames == 1
-                M.u_all(:,:) = u_frame;
-                M.v_all(:,:) = v_frame;
-            else
-                M.u_all(:,:,k) = u_frame;
-                M.v_all(:,:,k) = v_frame;
-            end
-        end
-        % Commit only AFTER both velocity components have been written.
-        % A timeout before this marker causes this pair to be recomputed.
-        M.completedFlowFrames = k;
-        if profileFrame, writeSeconds = toc(stageClock); end
+        k = i - 1;
+        M.u_all(:,:,k) = single(u_phys);
+        M.v_all(:,:,k) = single(v_phys);
 
         % --- MEMORY LOGGING (every 200 frames + first frame) ---
         if mod(k, 200) == 0 || k == 1
@@ -391,23 +189,17 @@ try
 
 
         % --- Update running sums for mean (double) ---
-        if profileFrame, stageClock = tic; end
-        sumU(maskROI) = sumU(maskROI) + double(u_roi);
-        sumV(maskROI) = sumV(maskROI) + double(v_roi);
-        sumMag(maskROI) = sumMag(maskROI) + hypot(double(u_roi), double(v_roi));
+        sumU   = sumU   + double(u_phys);
+        sumV   = sumV   + double(v_phys);
+        sumMag = sumMag + hypot(double(u_phys), double(v_phys));
         count  = count + 1;
-        if profileFrame
-            meanSeconds = toc(stageClock);
-            fprintf('[PROFILE] frame %d | read %.3fs | CLAHE %.3fs | RAFT %.3fs | write %.3fs | mean %.3fs\n', ...
-                k, readSeconds, claheSeconds, raftSeconds, writeSeconds, meanSeconds);
-        end
 
         % progress
         tElapsed = toc;
-        remainingSeconds = tElapsed / (k - completed) * (numFlowFrames - k);
+        estTotal = tElapsed / max(k,1) * numFlowFrames;
         pct = 100 * k / max(numFlowFrames,1);
-        fprintf('[%s] Processed flow frame %d/%d (%.1f%%) | Elapsed %.1fs | ETA %.1fs\n', ...
-            datestr(now, 'yyyy-mm-dd HH:MM:SS'), k, numFlowFrames, pct, tElapsed, max(remainingSeconds, 0));
+        fprintf('Processed flow frame %d/%d (%.1f%%) | Elapsed %.1fs | ETA %.1fs\n', ...
+            k, numFlowFrames, pct, tElapsed, max(estTotal - tElapsed, 0));
 
         framePrev = frameCurr;
     end
@@ -416,8 +208,7 @@ try
     %% ------------------------------------------------------------
     % Means
     %% ------------------------------------------------------------
-    fprintf('\n[%s] STEP 7/7: Computing mean fields + saving small outputs + plots...\n', ...
-        datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nSTEP 7/7: Computing mean fields + saving small outputs + plots...\n');
     u_mean  = single(sumU   / max(count,1));
     v_mean  = single(sumV   / max(count,1));
     velMean = single(sumMag / max(count,1));
@@ -448,7 +239,7 @@ try
     M.y_mm         = y_mm;
 
     %% ---------------- Throat profiles (mean-only, disk streaming) -----------
-    fprintf('Computing throat/downstream MEAN profiles from accumulated fields...\n');
+    fprintf('Computing throat/downstream MEAN profiles (disk streaming)...\n');
 
     throatFile = fullfile(filepath, [filename '_throat.mat']);
     if ~isfile(throatFile)
@@ -482,12 +273,33 @@ try
     x_sample_mm = x_mm(ix_throat):x_spacing:x_mm(end);
     ix_samples = arrayfun(@(x) find(abs(x_mm - x) == min(abs(x_mm - x)), 1), x_sample_mm);
 
-    % The profiles are column samples of the same means. Reuse the running
-    % sums instead of rereading the entire large velocity file a second time.
-    % Preserve zero values outside the ROI as in the original profile output.
-    u_profiles_mean = single(flipud(sumU(:,ix_samples)) / max(count,1));
-    v_profiles_mean = single(-flipud(sumV(:,ix_samples)) / max(count,1));
-    vel_profiles_mean = single(flipud(sumMag(:,ix_samples)) / max(count,1));
+    numX = numel(ix_samples);
+    numY = numel(y_mm);
+
+    sumUp   = zeros(numY, numX, 'double');
+    sumVp   = zeros(numY, numX, 'double');
+    sumMagp = zeros(numY, numX, 'double');
+
+    for k = 1:numFlowFrames
+        u_k = M.u_all(:,:,k);
+        v_k = M.v_all(:,:,k);
+
+        u_phys_k = flipud(u_k);
+        v_phys_k = -flipud(v_k);
+
+        for ii = 1:numX
+            xi = ix_samples(ii);
+            uk_col = double(u_phys_k(:, xi));
+            vk_col = double(v_phys_k(:, xi));
+            sumUp(:, ii)   = sumUp(:, ii)   + uk_col;
+            sumVp(:, ii)   = sumVp(:, ii)   + vk_col;
+            sumMagp(:, ii) = sumMagp(:, ii) + hypot(uk_col, vk_col);
+        end
+    end
+
+    u_profiles_mean   = single(sumUp   / numFlowFrames);
+    v_profiles_mean   = single(sumVp   / numFlowFrames);
+    vel_profiles_mean = single(sumMagp / numFlowFrames);
 
     profileFile = fullfile(matDir, [filename '_ThroatProfiles_mean.mat']);
     save(profileFile, ...
@@ -668,7 +480,7 @@ try
     end
 
     %% --------------------- FINAL SUMMARY --------------------------
-    fprintf('\n[%s] DONE.\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('\nDONE.\n');
     fprintf('Instantaneous frames: SAVED incrementally to %s (u_all, v_all)\n', uvFile);
     fprintf('Folders:\n  MAT:   %s\n  Plots: %s\n', matDir, plotsDir);
 
@@ -707,21 +519,9 @@ catch ME
     catch
         fprintf(2, 'Error logging failed.\n');
     end
-    rethrow(ME);  % Let MATLAB batch / SLURM report failure.
 end
 
 %% --------------------- helper ---------------------
 function out = tern(cond, a, b)
 if cond, out = a; else, out = b; end
-end
-
-% Keep CLAHE preprocessing on the CPU, independent of RAFT execution environment.
-function frame = prepareFrame(frame, contrastMode, claheImplementation)
-frame = im2gray(frame);
-if contrastMode == "clahe"
-    if claheImplementation ~= "cpu_adapthisteq_v1"
-        error('Unknown CLAHE implementation: %s', claheImplementation);
-    end
-    frame = adapthisteq(frame);
-end
 end
