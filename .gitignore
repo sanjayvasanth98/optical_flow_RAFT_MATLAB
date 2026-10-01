@@ -1,2 +1,30 @@
 test100frames/
 test100frames/**
+
+# MATLAB figures and exported plots
+*.fig
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+*.gif
+*.eps
+*.svg
+*.emf
+
+# Video files
+*.avi
+*.mp4
+*.mov
+*.mkv
+*.wmv
+*.mpg
+*.mpeg
+*.m4v
+*.webm
+
+# PDF plot exports; keep documentation PDFs trackable
+**/plots/**/*.pdf
+**/results/**/*.pdf
