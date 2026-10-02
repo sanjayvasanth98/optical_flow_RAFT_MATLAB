@@ -1,38 +1,37 @@
 %% RAFT_chunk_analysis.m
-% Inspect one selected flow-frame range per MAT file from
-% raftmatlabsideview_ARC.m output, for one phase per run.
-% No full u_all/v_all arrays are loaded. Each read is restricted to one
-% case's frame range and at most maxFramesPerRead consecutive frames.
-% Flow frame k is the velocity between video frames k and k+1 (1-based).
+% Analyze selected frames from RAFT velocity MAT files.
+% Read frames in small blocks to limit memory use.
+% Flow frame k describes the velocity between video frames k and k+1.
 
 clearvars; clc;
 
-%% 1. MAT-file paths (edit these)
+%% 1. Choose velocity files and case labels
+% Add one MAT file per case. Use the labels in profile legends and map titles.
 matPaths = { ...
     'E:\Sept 2026 Flowfield data\Processed data\P10S20\mat files\P10S20_3_475_40lpm_velocity.mat';
     % 'E:\path\to\case2_velocity.mat';
 };
 
-% Labels appear in the comparison plot legend, in the same order as matPaths.
+% Keep labels in the same order as the MAT files.
 caseLabels = { ...
     'Rough5';  % Change to the roughness label you want shown.
     % 'Case 2 roughness';
 };
 
-%% 2. Phase and frame range for each MAT file (edit these)
-% Run one phase at a time. Set this label to "pre-inception", "inception",
-% or "desinence" when you change the ranges for the next run.
+%% 2. Choose the phase and frames to analyze
+% Set the phase label for this run: pre-inception, inception, or desinence.
 analysisPhase = "Inception";
 
-% One row per path in matPaths, in the same order. A comma separates the
-% start/end frames within a case; a semicolon separates cases.
-% Endpoints are inclusive. Example: case 1 uses flow frames 2000:5000.
+% Give each MAT file one [firstFrame lastFrame] row, in the same order.
+% Both endpoints are included; [2000 5000] processes frames 2000:5000.
 frameRanges = [ ...
     2000, 5000;  % case 1
     % 7000, 9000;  % case 2 (uncomment when case 2 path is added)
 ];
 
-%% 3. Read settings
+%% 3. Set reading and output options
+% Limit frames per disk read, choose whether to make a frame summary,
+% and set where plots are saved.
 maxFramesPerRead = 100;  % Upper bound per disk read; lower this for less RAM.
 makeFrameSummary = false;  % Set true to also scan the full ROI for a time trace.
 outputDir = fullfile(fileparts(mfilename('fullpath')), 'results');
@@ -40,7 +39,9 @@ outputDir = fullfile(fileparts(mfilename('fullpath')), 'results');
 % know that every allocated frame in those files was written successfully.
 assumeCompleteWhenNoCounter = false;
 
-%% 4. Validate paths, frame ranges, and small metadata
+%% 4. Check the inputs and prepare file information
+% Confirm that the files, labels, and frame ranges are usable.
+% Read file metadata needed for the analysis without loading all frames.
 assert(~isempty(matPaths), 'Add at least one MAT-file path.');
 assert(numel(caseLabels) == numel(matPaths), ...
     'Add one case label for each MAT-file path.');
@@ -72,11 +73,10 @@ for fileIndex = 1:numel(matPaths)
         fileIndex, info.completedFrames);
 end
 
-%% 5. Analysis 1: time trace of ROI-averaged velocity in each case range
-% Output contains one small row per selected flow frame. U and V retain
-% image coordinates: +U is right and +V is down. Speed is hypot(U,V).
-% Only finite U/V pairs inside maskROI contribute to each average.
-% This optional section reads the full ROI for the selected frames.
+%% 5. Optionally summarize each frame across the ROI
+% If makeFrameSummary is true, calculate mean U, V, and speed for every
+% selected frame using valid pixels inside the ROI. Print the first 10 rows.
+% U points right and V points down in the source image.
 frameSummary = table();
 if makeFrameSummary
 nSelected = sum(frameRanges(:,2) - frameRanges(:,1) + 1);
@@ -130,13 +130,13 @@ fprintf('Summarized %d selected flow frames. Full velocity blocks were released 
     height(frameSummary));
 end
 
-%% 6. Mean speed profiles at selected stations downstream of the throat
-% Mean speed means mean(hypot(U,V)), matching the writer's velMean field,
-% calculated from each case's selected frame range. The plotted y axis is
-% physical orientation: y increases upward from the bottom of the image.
-% This section reads only the selected station columns and frame ranges.
-% Specify one or more distances downstream from each case's throat (mm).
+%% 6. Plot mean speed profiles at selected stations
+% Choose distances downstream from the throat. At each station, average
+% speed over the selected frames at every height. Plot one figure per
+% station, with all cases overlaid. The plot's y axis points upward.
+
 profileOffset_mm = [1.5 3.0 4.5];
+
 assert(isnumeric(profileOffset_mm) && isvector(profileOffset_mm) && ...
     ~isempty(profileOffset_mm) && all(isfinite(profileOffset_mm)) && ...
     all(profileOffset_mm >= 0), ...
@@ -203,28 +203,17 @@ if maxProfileSpeed > 0
 else
     speedAxisMax = 1;
 end
-palette = [ ...
-    0.16 0.34 0.58;  % blue
-    0.72 0.36 0.20;  % burnt orange
-    0.22 0.49 0.39;  % green
-    0.47 0.39 0.61;  % purple
-    0.67 0.53 0.24;  % ochre
-    0.19 0.52 0.61]; % teal
-markers = {'o','s','^','d','v','>','<','p','h'};
-caseLineStyles = {'-','--','-.',':'};
 if ~exist(outputDir,'dir'), mkdir(outputDir); end
 
-% Keep an individual comparison figure for each station.
+% Reference order: open black circles, green crosses, solid blue, dashed red.
+% Keep each case's style the same at every station.
 for stationIndex = 1:numel(profileOffset_mm)
-    fig = figure('Color','w','Position',[100 100 1050 720]);
+    fig = figure('Color','w','Position',[100 100 760 650]);
     ax = axes(fig);
     hold(ax,'on');
     for i = 1:numel(matPaths)
         profile = meanSpeedProfiles{i,stationIndex};
-        caseColor = palette(mod(i-1,size(palette,1))+1,:);
-        caseMarker = markers{mod(i-1,numel(markers))+1};
-        plotProfileSeries(ax,profile,caseColor,caseMarker,'-', ...
-            char(string(caseLabels{i})));
+        plotProfileSeries(ax,profile,mod(i-1,4)+1,char(string(caseLabels{i})));
     end
     styleProfileAxes(ax,sprintf('Mean speed | throat + %.2f mm | %s', ...
         profileOffset_mm(stationIndex),char(analysisPhase)), ...
@@ -245,47 +234,117 @@ for stationIndex = 1:numel(profileOffset_mm)
     fprintf('Saved comparison plots: %s and %s\n',profilePlotPath,profileFigPath);
 end
 
-% The combined figure uses color and marker for station, line style for case.
-combinedFig = figure('Color','w','Position',[100 100 1200 760]);
-combinedAx = axes(combinedFig);
-hold(combinedAx,'on');
-for stationIndex = 1:numel(profileOffset_mm)
-    stationColor = palette(mod(stationIndex-1,size(palette,1))+1,:);
-    stationMarker = markers{mod(stationIndex-1,numel(markers))+1};
-    for i = 1:numel(matPaths)
-        profile = meanSpeedProfiles{i,stationIndex};
-        caseLineStyle = caseLineStyles{mod(i-1,numel(caseLineStyles))+1};
-        seriesLabel = sprintf('%s | +%.2f mm', ...
-            char(string(caseLabels{i})),profileOffset_mm(stationIndex));
-        plotProfileSeries(combinedAx,profile,stationColor,stationMarker, ...
-            caseLineStyle,seriesLabel);
+%% 7. Plot mean speed maps with station lines
+% Average speed over the selected frames at every valid ROI pixel.
+% Save one map per case with vertical lines showing the Section 6 stations.
+% Read a few full-ROI frames at a time to limit memory use.
+mapFramesPerRead = min(maxFramesPerRead,5);
+meanSpeedMaps = cell(numel(matPaths),1);
+maxMapSpeed = 0;
+for i = 1:numel(matPaths)
+    info = fileInfo{i};
+    nROIPixels = nnz(info.maskROI);
+    speedSum = zeros(nROIPixels,1);
+    validCount = zeros(nROIPixels,1);
+    fprintf('Mean speed map for %s: flow frames %d:%d.\n', ...
+        char(string(caseLabels{i})),frameRanges(i,1),frameRanges(i,2));
+    for k0 = frameRanges(i,1):mapFramesPerRead:frameRanges(i,2)
+        k1 = min(k0+mapFramesPerRead-1,frameRanges(i,2));
+        [U,V] = readVelocityBlock(info,k0,k1);
+        validBlock = isfinite(U) & isfinite(V);
+        speedBlock = hypot(U,V);
+        speedBlock(~validBlock) = 0;
+        speedSum = speedSum + sum(double(speedBlock),2);
+        validCount = validCount + sum(validBlock,2);
+        clear U V validBlock speedBlock
     end
+    hasSamples = validCount > 0;
+    assert(any(hasSamples), ...
+        'Case %d has no finite U/V samples in the selected frame range.',i);
+    meanSpeedROI = nan(nROIPixels,1,'single');
+    meanSpeedROI(hasSamples) = single(speedSum(hasSamples) ./ validCount(hasSamples));
+    speedImage = nan(size(info.maskROI),'single');
+    speedImage(info.maskROI) = meanSpeedROI;
+    meanSpeedMaps{i} = flipud(speedImage);
+    maxMapSpeed = max(maxMapSpeed,double(max(meanSpeedROI(hasSamples))));
+    clear speedSum validCount meanSpeedROI speedImage
 end
-styleProfileAxes(combinedAx,sprintf('Mean speed profiles | %s', ...
-    char(analysisPhase)),speedAxisMax,[minProfileY maxProfileY]);
-lgd = legend(combinedAx,'show','Location','eastoutside', ...
-    'Interpreter','none','Box','off');
-set(lgd,'FontName','Times New Roman','FontSize',11);
-combinedPlotBase = fullfile(outputDir,sprintf( ...
-    'mean_speed_profiles_all_stations_%s',char(analysisPhase)));
-combinedPngPath = [combinedPlotBase '.png'];
-combinedFigPath = [combinedPlotBase '.fig'];
-exportgraphics(combinedFig,combinedPngPath,'Resolution',600);
-savefig(combinedFig,combinedFigPath);
-fprintf('Saved combined plots: %s and %s\n',combinedPngPath,combinedFigPath);
 
-%% 7. Later analyses
-% For future whole-ROI calculations, set makeFrameSummary=true and add them
-% inside Section 5's read loop, where U/V are available before being
-% cleared. U/V have one ROI pixel per row, ordered as find(info.maskROI),
-% and one selected frame per column. Section 6 reads only the station columns.
-% To reconstruct one image-coordinate frame:
+% Use the same color scale across cases for direct comparison.
+if maxMapSpeed > 0
+    mapColorMax = double(maxMapSpeed);
+else
+    mapColorMax = 1;
+end
+stationColors = [ ...
+    0.95 0.70 0.00;  % gold
+    0.95 0.22 0.45;  % pink
+    0.00 0.65 0.78;  % cyan
+    0.68 0.28 0.88;  % purple
+    0.97 0.46 0.08]; % orange
+for i = 1:numel(matPaths)
+    info = fileInfo{i};
+    mapPhysical = meanSpeedMaps{i};
+    fig = figure('Color','w','Position',[100 100 1200 800]);
+    ax = axes(fig);
+    imageHandle = imagesc(ax,info.x_mm,info.y_mm,mapPhysical);
+    set(imageHandle,'AlphaData',single(isfinite(mapPhysical)), ...
+        'HandleVisibility','off');
+    set(ax,'YDir','normal','FontName','Times New Roman','FontSize',12, ...
+        'LineWidth',1,'TickDir','in','Box','on','Layer','top', ...
+        'XColor',[0.18 0.18 0.18],'YColor',[0.18 0.18 0.18]);
+    axis(ax,'image');
+    colormap(ax,turbo(256));
+    caxis(ax,[0 mapColorMax]);
+    hold(ax,'on');
+    for stationIndex = 1:numel(profileOffset_mm)
+        stationX = profileInfo{i,stationIndex}.profileX_mm;
+        stationColor = stationColors(mod(stationIndex-1,size(stationColors,1))+1,:);
+        plot(ax,[stationX stationX],[info.y_mm(1) info.y_mm(end)],'-', ...
+            'Color',[0.08 0.08 0.08],'LineWidth',3.4, ...
+            'HandleVisibility','off');
+        plot(ax,[stationX stationX],[info.y_mm(1) info.y_mm(end)],'--', ...
+            'Color',stationColor,'LineWidth',2, ...
+            'DisplayName',sprintf('Station %d: +%.2f mm', ...
+                stationIndex,profileOffset_mm(stationIndex)));
+    end
+    xlabel(ax,'x (mm)','FontName','Times New Roman','FontSize',14);
+    ylabel(ax,'y (mm)','FontName','Times New Roman','FontSize',14);
+    title(ax,sprintf('%s | Mean speed | frames %d:%d | %s', ...
+        char(string(caseLabels{i})),frameRanges(i,1),frameRanges(i,2), ...
+        char(analysisPhase)), ...
+        'FontName','Times New Roman','FontSize',15, ...
+        'FontWeight','normal','Interpreter','none');
+    cb = colorbar(ax,'eastoutside');
+    set(cb,'FontName','Times New Roman','FontSize',11,'TickDirection','in');
+    cb.Label.String = 'Mean speed (m/s)';
+    cb.Label.FontName = 'Times New Roman';
+    cb.Label.FontSize = 13;
+    lgd = legend(ax,'show','Location','southoutside', ...
+        'Orientation','horizontal','Interpreter','none','Box','off');
+    set(lgd,'FontName','Times New Roman','FontSize',11);
+
+    safeLabel = regexprep(char(string(caseLabels{i})),'[^A-Za-z0-9_-]','_');
+    mapPlotBase = fullfile(outputDir,sprintf( ...
+        'case%02d_%s_mean_speed_map_%s_frames%d-%d', ...
+        i,safeLabel,char(analysisPhase),frameRanges(i,1),frameRanges(i,2)));
+    mapPngPath = [mapPlotBase '.png'];
+    mapFigPath = [mapPlotBase '.fig'];
+    exportgraphics(fig,mapPngPath,'Resolution',600);
+    savefig(fig,mapFigPath);
+    fprintf('Saved mean speed map: %s and %s\n',mapPngPath,mapFigPath);
+end
+
+%% 8. Notes for future calculations
+% This section only shows how to rebuild an image from ROI data; it runs
+% no analysis. U/V rows follow find(info.maskROI), with one frame per column.
+% To rebuild one image-coordinate frame:
 %   uImage = nan(size(info.maskROI), 'single');
 %   uImage(info.maskROI) = U(:,1);
 % To get physical coordinates (origin at lower left):
 %   uPhysical = flipud(uImage);  vPhysical = -flipud(vImage);
 
-%% Local helpers
+%% Helper functions used by the sections above
 function info = inspectVelocityFile(matPath, assumeCompleteWhenNoCounter)
     assert(isfile(matPath), 'MAT file not found: %s', char(string(matPath)));
     % Partial matfile reads require v7.3/HDF5 storage. Reject older MAT
@@ -453,26 +512,59 @@ function [U,V] = readVelocityBlock(info,k0,k1)
     end
 end
 
-function plotProfileSeries(ax,profile,lineColor,markerSymbol,lineStyle,seriesLabel)
+function plotProfileSeries(ax,profile,styleIndex,seriesLabel)
     validRows = find(isfinite(profile.meanSpeed_mps) & isfinite(profile.y_mm));
     assert(~isempty(validRows), 'Cannot plot a profile without finite values.');
-    % Show a small, even sample of markers so dense pixel rows stay legible.
-    nMarkers = min(12,numel(validRows));
-    markerRows = unique(validRows(round(linspace(1,numel(validRows),nMarkers))));
+    switch styleIndex
+        case 1  % open black circles
+            lineColor = [0 0 0];
+            lineStyle = '-';
+            markerSymbol = 'o';
+            markerCount = 25;
+            lineWidth = 1.3;
+            markerSize = 6;
+        case 2  % dense green crosses
+            lineColor = [0 0.55 0];
+            lineStyle = '-';
+            markerSymbol = 'x';
+            markerCount = 70;
+            lineWidth = 1.4;
+            markerSize = 5;
+        case 3  % solid blue curve
+            lineColor = [0 0 1];
+            lineStyle = '-';
+            markerSymbol = 'none';
+            markerCount = 0;
+            lineWidth = 2.5;
+            markerSize = 6;
+        case 4  % dashed red curve
+            lineColor = [1 0 0];
+            lineStyle = '--';
+            markerSymbol = 'none';
+            markerCount = 0;
+            lineWidth = 2;
+            markerSize = 6;
+    end
+    markerRows = [];
+    if markerCount > 0
+        nMarkers = min(markerCount,numel(validRows));
+        markerRows = unique(validRows(round(linspace(1,numel(validRows),nMarkers))));
+    end
     plot(ax,profile.meanSpeed_mps,profile.y_mm, ...
-        'Color',lineColor,'LineStyle',lineStyle,'LineWidth',1.8, ...
+        'Color',lineColor,'LineStyle',lineStyle,'LineWidth',lineWidth, ...
         'Marker',markerSymbol,'MarkerIndices',markerRows, ...
-        'MarkerSize',6,'MarkerFaceColor','w','MarkerEdgeColor',lineColor, ...
+        'MarkerSize',markerSize,'MarkerFaceColor','w', ...
+        'MarkerEdgeColor',lineColor, ...
         'DisplayName',seriesLabel);
 end
 
 function styleProfileAxes(ax,plotTitle,speedAxisMax,yLimits)
     fontName = 'Times New Roman';
     set(ax,'FontName',fontName,'FontSize',12,'LineWidth',1, ...
-        'TickDir','out','Box','off','Color','w', ...
-        'XColor',[0.18 0.18 0.18],'YColor',[0.18 0.18 0.18], ...
-        'XGrid','on','YGrid','off','GridColor',[0.84 0.86 0.88], ...
-        'GridAlpha',0.35,'Layer','top');
+        'TickDir','in','Box','on','Color','w', ...
+        'XColor',[0 0 0],'YColor',[0 0 0], ...
+        'XGrid','on','YGrid','on','GridColor',[0.67 0.67 0.67], ...
+        'GridAlpha',0.6,'Layer','top');
     xlim(ax,[0 speedAxisMax]);
     if yLimits(2) > yLimits(1)
         ylim(ax,yLimits);
