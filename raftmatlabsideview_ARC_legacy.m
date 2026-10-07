@@ -20,12 +20,21 @@ raftIters     = 8;
 raftTolerance = 1e-6;
 accelMode     = "auto";
 
-% Execution environment
-if canUseGPU
-    executionEnv = "gpu";
-else
-    executionEnv = "cpu";
+% This cluster job requires GPU inference; stop if MATLAB cannot use it.
+executionEnv = "gpu";
+if ~canUseGPU
+    error(['RAFT requires a MATLAB-accessible GPU, but canUseGPU returned false. ' ...
+        'Check the job GPU allocation, Parallel Computing Toolbox license, ' ...
+        'CUDA driver, and GPU support. Run validateGPU in this job for details.']);
 end
+gpuInfo = gpuDevice;
+fprintf('RAFT GPU: %s | total %.1f GB | available %.1f GB\n', ...
+    gpuInfo.Name, gpuInfo.TotalMemory/1e9, gpuInfo.AvailableMemory/1e9);
+if gpuInfo.TotalMemory < 12e9
+    error('RAFT GPU inference requires at least 12 GB of GPU memory; %s has %.1f GB.', ...
+        gpuInfo.Name, gpuInfo.TotalMemory/1e9);
+end
+fprintf('Running script: %s\n', mfilename('fullpath'));
 
 %% --- Calibration parameters ---
 mm_per_pixel = 0.00828164;         % [mm/pixel]

@@ -8,7 +8,7 @@ clear; clc; close all;
 %% ------------------------- USER SETTINGS -------------------------------
 % Set this to the total number of video frames to read (including the first
 % reference frame).  Use Inf to process the entire video.
-numFramesToProcess = 20;
+numFramesToProcess = 10;
 
 showFigures = true;
 savePlots = true;
@@ -18,7 +18,7 @@ accelMode = "auto";
 
 % Optional: set the full path here to skip the file-selection dialog.
 % Leave this as "" to choose a video interactively when the script runs.
-videoPath = "E:\Sept 2026 Flowfield data\P10S20\P10S20_3_475_40lpm.avi";
+videoPath = "D:\Working codes\RAFT code\optical_flow_RAFT_MATLAB\test100frames\P10S20_3_475_40lpm-1.avi";
 
 % Cropped videos may not need an ROI or a throat reference.
 useFullFrameROI = true;   % true: use every pixel and skip ROI selection
@@ -235,13 +235,15 @@ velMean_phys = flipud(velMean);
 x_mm = (0:W-1) * mm_per_pixel;
 y_mm = (0:H-1) * mm_per_pixel;
 x_throat_mm = x_throat_pixel * mm_per_pixel;
+completedFlowFrames = numFlowFrames;
 
 outFile = fullfile(matDir, sprintf('%s_velocity_local_%s_%dframes.mat', ...
     filename, contrastLabel, numFrames));
 save(outFile, 'u_all', 'v_all', 'u_mean', 'v_mean', 'velMean', ...
     'u_mean_phys', 'v_mean_phys', 'velMean_phys', 'maskROI', ...
     'x_mm', 'y_mm', 'x_throat_pixel', 'y_throat_pixel', 'x_throat_mm', ...
-    'mm_per_pixel', 'm_per_pixel', 'fps', 'numFrames', 'numFlowFrames', '-v7.3');
+    'mm_per_pixel', 'm_per_pixel', 'fps', 'numFrames', 'numFlowFrames', ...
+    'completedFlowFrames', '-v7.3');
 fprintf('Saved local results: %s\n', outFile);
 
 if savePlots

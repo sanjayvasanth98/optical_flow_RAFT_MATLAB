@@ -3,7 +3,7 @@
 ARC/HPC-friendly MATLAB pipeline to compute **RAFT optical flow** on high-speed videos and produce **calibrated velocity fields (m/s)**, **time-averaged plots**, and **throat-referenced profiles** with robust memory/I/O handling.
 
 ## What it does
-- Runs **opticalFlowRAFT** (GPU-first, CPU fallback)
+- Runs **opticalFlowRAFT** on GPU and stops with a diagnostic if MATLAB cannot use it
 - Calibrates velocities using `mm_per_pixel` and `fps`
 - Applies **ROI masking** (and ROI-respecting 5-point neighbor averaging)
 - Streams results to disk with **chunked MAT writes** (default: every 100 frames)
@@ -13,10 +13,10 @@ ARC/HPC-friendly MATLAB pipeline to compute **RAFT optical flow** on high-speed 
 - Saves ROI diagnostics as binary images
 
 ## Requirements
-- MATLAB R2023b+ (recommended)
+- MATLAB R2024b+ (`opticalFlowRAFT` was introduced in R2024b)
 - Computer Vision Toolbox (for `opticalFlowRAFT`)
 - Image Processing Toolbox
-- Parallel Computing Toolbox (optional, for GPU)
+- Parallel Computing Toolbox and a supported GPU with at least 12 GB memory (required for RAFT GPU inference)
 
 ## Inputs
 - `videoPath` (AVI)
