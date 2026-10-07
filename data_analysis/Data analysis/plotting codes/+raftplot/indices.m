@@ -1,0 +1,9 @@
+function selected = indices(requested,count,label)
+selected = requested;
+if isempty(selected), selected = 1:count; end
+assert(isnumeric(selected) && isvector(selected) && ...
+    all(isfinite(selected)) && all(selected == fix(selected)) && ...
+    all(selected >= 1 & selected <= count), ...
+    '%s must be integer indices within 1:%d.',label,count);
+selected = unique(selected(:)','stable');
+end

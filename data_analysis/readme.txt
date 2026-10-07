@@ -86,3 +86,11 @@ IMPORTANT NOTES
 * Prerequisites: Input .mat files must contain 'u_all', 'v_all', 'mm_per_pixel', 'maskROI', and 'x_throat_mm'.
 * Memory Efficiency: The script processes data in chunks (default 100 frames) to handle large 3D arrays.
 * Paths: Always use absolute paths (starting with /home/ or /groups/) to avoid file-not-found errors.
+
+CHUNKED MULTI-PHASE ANALYSIS
+----------------------------
+For RAFT_chunk_analysis.m, see "Data analysis/README.md".
+The script supports pre-inception, inception, desinence, and fullcase,
+independent phase/case filters per analysis, and phase-specific frame ranges.
+Results are organized as results/<date>/<run>/<phase>/<analysis>/.
+Standalone plotting options include analysisPhase to select saved phase data.
