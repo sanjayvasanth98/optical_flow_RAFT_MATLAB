@@ -1,6 +1,10 @@
 test100frames/
 test100frames/**
 
+# MATLAB and CSV data files
+*.[mM][aA][tT]
+*.[cC][sS][vV]
+
 # MATLAB figures and exported plots
 *.fig
 *.png

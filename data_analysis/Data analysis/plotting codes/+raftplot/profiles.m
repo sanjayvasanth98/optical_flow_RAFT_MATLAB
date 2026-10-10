@@ -1,15 +1,23 @@
 function profiles(options,metricIndices)
 [files,runDir] = raftplot.source(options,'profiles');
 data = load(files{1});
-fields = {'meanU_over_Ub','sqrtReynoldsShear_over_Ub', ...
-    'sigmaU_over_Ub','sigmaV_over_Ub','tkeInPlane_over_Ub2'};
+% Accept profiles saved before the K_2C terminology update.
+for index = 1:numel(data.verticalProfiles)
+    p = data.verticalProfiles{index};
+    if ~isfield(p,'K_2C_over_Ub2') && isfield(p,'tkeInPlane_over_Ub2')
+        p.K_2C_over_Ub2 = p.tkeInPlane_over_Ub2;
+        data.verticalProfiles{index} = p;
+    end
+end
+fields = {'meanU_over_Ub','reynoldsShear_over_Ub2', ...
+    'sigmaU_over_Ub','sigmaV_over_Ub','K_2C_over_Ub2'};
 names = {'Mean streamwise U','Reynolds shear stress', ...
     'Streamwise velocity standard deviation', ...
-    'Wall-normal velocity standard deviation','In-plane turbulent kinetic energy'};
-labels = {'$\overline{u}/U_b$','$\sqrt{-\overline{u''v''}}/U_b$', ...
-    '$\sigma_u/U_b$','$\sigma_v/U_b$','$k_{2D}/U_b^2$'};
-tags = {'mean_streamwise_U','sqrt_reynolds_shear', ...
-    'sigma_streamwise_U','sigma_wall_normal_V','tke_in_plane'};
+    'Wall-normal velocity standard deviation','2-component fluctuation energy K_2C'};
+labels = {'$\overline{u}/U_b$','$-\overline{u''v''}/U_b^2$', ...
+    '$\sigma_u/U_b$','$\sigma_v/U_b$','$K_{2C}/U_b^2$'};
+tags = {'mean_streamwise_U','signed_reynolds_shear', ...
+    'sigma_streamwise_U','sigma_wall_normal_V','K_2C'};
 cases = raftplot.indices(options.caseIndices,size(data.verticalProfiles,1),'caseIndices');
 sourceCaseIndices = 1:size(data.verticalProfiles,1);
 if isfield(data,'caseIndices'), sourceCaseIndices = data.caseIndices; end
@@ -48,6 +56,11 @@ for metric = metricIndices
         warning('No finite values for %s; skipping.',names{metric}); continue
     end
     limits = [min(0,minimum) max(0,maximum)];
+    if strcmp(fields{metric},'reynoldsShear_over_Ub2')
+        xExtent = max(abs(limits));
+        if xExtent == 0, xExtent = 0.01; end
+        limits = [-xExtent xExtent];
+    end
     padding = max(0.03*diff(limits),0.01*(diff(limits)==0));
     if limits(1) ~= 0, limits(1) = limits(1)-padding; end
     limits(2) = limits(2)+padding;
@@ -64,6 +77,9 @@ for metric = metricIndices
         if count == 0, close(fig); continue; end
         xlim(ax,limits); ylim(ax,[0 maxY+max(0.03*maxY,0.01)]);
         raftplot.style(ax,options);
+        if strcmp(fields{metric},'reynoldsShear_over_Ub2')
+            xline(ax,0,'--','HandleVisibility','off');
+        end
         xlabel(ax,labels{metric},'Interpreter','latex','FontSize',options.labelFontSize);
         ylabel(ax,'y/H','FontSize',options.labelFontSize);
         title(ax,sprintf('%s | throat + %.3f H | %s',names{metric}, ...

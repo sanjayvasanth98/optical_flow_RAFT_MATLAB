@@ -10,6 +10,12 @@ clearvars; clc;
 throatHeight_mm = 10;  % H, used to scale spatial coordinates.
 throatWidth_mm = 5;     % Channel width into the image plane.
 flowRate_Lpm = 40;      % Shared flow rate, or one value per MAT file in order.
+showPlots = false;      % true: show plots in MATLAB; false: only save them.
+
+figureVisibility = 'off';
+if showPlots
+    figureVisibility = 'on';
+end
 
 
 %% Analysis
@@ -71,6 +77,26 @@ caseLabels = { ...
     % 'Case 6 roughness';
 };
 
+% Analysis 1 only: one source video per original matPaths entry.
+% "" keeps that case unmasked. Threshold is on the grayscale 0..255 scale.
+vapourVideoPaths = { ...
+    "E:\Sept 2026 Flowfield data\P10S20\P10S20_3_475_40lpm.avi";
+    "E:\Sept 2026 Flowfield data\P10S30\P10S30_3_472_40lpm.avi";
+    "E:\Sept 2026 Flowfield data\P10S50\P10S50_3_456_40lpm.avi";
+    "E:\Sept 2026 Flowfield data\P10S70\P10S70_3_453_40lpm.avi";
+    "E:\Sept 2026 Flowfield data\P10S100\P10S100_3_440_40lpm.avi";
+    "E:\Sept 2026 Flowfield data\Smooth\Smooth_3_444_40lpm.avi";
+};
+threshold = 20;
+minArea = 20;
+nBgFrames = 50;
+dilatePxList = [0 3 5 8];
+dilateMinArea = 50;  % Only union-core blobs at least this large are dilated.
+flowToImageOffset = 0;  % Flow k: images k+offset -> k+1+offset.
+% Shared across dated run folders so matching cores can be reused on reruns.
+vapourCacheDir = fullfile(fileparts(mfilename('fullpath')), ...
+    'results','vapour_mask_cache');
+
 
 %% Choose frame ranges for each phase
 % Each phase has one [firstFrame lastFrame] row per original MAT file.
@@ -88,12 +114,12 @@ frameRangesByPhase.pre_inception = [ ...
 ];
 
 frameRangesByPhase.inception = [ ...
-    2000, 5000;  % case 1
-    2000, 5000;  % case 2
-    2000, 5000;  % case 3
-    2000, 5000;  % case 4
-    2000, 5000;  % case 5
-    2000, 5000;  % case 6
+    3000, 8000;  % case 1
+    2000, 7000;  % case 2
+    2000, 7000;  % case 3
+    2000, 7000;  % case 4
+    3000, 8000;  % case 5
+    8000, 13000;  % case 6
 ];
 
 frameRangesByPhase.desinence = [ ...
@@ -319,12 +345,66 @@ else
 end
 bulkThroatSpeed_mps = (caseFlowRate_Lpm * 1e-3 / 60) / throatArea_m2;
 
+% Check pairing for every masked case before computing any profile.
+assert(numel(vapourVideoPaths) == numel(allInputs.matPaths), ...
+    'vapourVideoPaths needs one entry per original matPaths entry ("" disables masking).');
+analysis1VideoPaths = string(vapourVideoPaths(caseIndices));
+maskedCases = find(strlength(analysis1VideoPaths) > 0);
+vapourCores = cell(numel(matPaths),1);
+vapourRuntimeSeconds = zeros(numel(matPaths),1);
+profileRuntimeSeconds = zeros(numel(matPaths),1);
+if ~isempty(maskedCases)
+    [folderCreated,folderMessage] = mkdir(vapourCacheDir);
+    assert(folderCreated,'Cannot create vapour cache folder: %s',folderMessage);
+    fprintf('Vapour core cache: %s\n',vapourCacheDir);
+    validateattributes(threshold,{'numeric'},{'scalar','real','finite','nonnegative'});
+    validateattributes(minArea,{'numeric'},{'scalar','integer','finite','positive'});
+    validateattributes(nBgFrames,{'numeric'},{'scalar','integer','finite','positive'});
+    validateattributes(dilatePxList,{'numeric'}, ...
+        {'vector','nonempty','integer','finite','nonnegative'});
+    assert(numel(unique(dilatePxList)) == numel(dilatePxList), ...
+        'dilatePxList must contain distinct radii.');
+    validateattributes(dilateMinArea,{'numeric'},{'scalar','integer','finite','positive'});
+    validateattributes(flowToImageOffset,{'numeric'},{'scalar','integer','finite'});
+    % Resolve the existing segmentation functions relative to this script.
+    vapourHelperDir = fullfile(fileparts(fileparts(fileparts( ...
+        mfilename('fullpath')))),'Runcodes');
+    addpath(vapourHelperDir);
+    for i = maskedCases(:)'
+        vapourTimer = tic;
+        [firstU,firstV] = readVelocityBlock(fileInfo{i},1,1);
+        firstFlowAllZero = all(firstU(:) == 0) && all(firstV(:) == 0);
+        firstImage = frameRanges(i,1) + flowToImageOffset;
+        fprintf(['Vapour pairing | %s | flow frame 1 all zero: %d | ' ...
+            'first selected flow %d: images %d -> %d (offset %+d).\n'], ...
+            char(string(caseLabels{i})),firstFlowAllZero,frameRanges(i,1), ...
+            firstImage,firstImage+1,flowToImageOffset);
+        assert(~(frameRanges(i,1) == 1 && firstFlowAllZero), ...
+            'Case %s starts at all-zero flow frame 1; correct the frame range/pairing.', ...
+            char(string(caseLabels{i})));
+        clear firstU firstV
+        vapourRuntimeSeconds(i) = toc(vapourTimer);
+    end
+    for i = maskedCases(:)'
+        vapourTimer = tic;
+        safeLabel = regexprep(char(string(caseLabels{i})),'[^A-Za-z0-9_-]','_');
+        coreFile = fullfile(vapourCacheDir,sprintf('case%02d_%s_vapour_core_masks.mat', ...
+            caseIndices(i),safeLabel));
+        neededImages = (frameRanges(i,1)+flowToImageOffset: ...
+            frameRanges(i,2)+1+flowToImageOffset)';
+        vapourCores{i} = prepareVapourCores(analysis1VideoPaths(i), ...
+            neededImages,fileInfo{i}.maskROI,threshold,minArea,nBgFrames,coreFile);
+        vapourRuntimeSeconds(i) = vapourRuntimeSeconds(i) + toc(vapourTimer);
+    end
+end
+
 % Rows are cases; columns are stations. Each statistic uses time samples
 % where both U and V are finite, so covariance and component RMS agree.
 verticalProfiles = cell(numel(matPaths),numel(profileOffset_mm));
 maxProfileY = 0;
 for stationIndex = 1:numel(profileOffset_mm)
     for i = 1:numel(matPaths)
+        profileTimer = tic;
         info = profileInfo{i,stationIndex};
         nRows = numel(info.profileImageRows);
         sampleCount = zeros(nRows,1);
@@ -374,13 +454,7 @@ for stationIndex = 1:numel(profileOffset_mm)
         sigmaU = profileToPhysicalRows(sqrt(varU),info);
         sigmaV = profileToPhysicalRows(sqrt(varV),info);
         reynoldsShear = profileToPhysicalRows(-covUV,info);
-        % The reference uses sqrt(-<u'v'>)/U_b. This is undefined where
-        % -<u'v'> is negative; retain the signed stress separately below.
-        sqrtReynoldsShear = nan(size(reynoldsShear));
-        nonnegativeShear = isfinite(reynoldsShear) & reynoldsShear >= 0;
-        sqrtReynoldsShear(nonnegativeShear) = ...
-            sqrt(reynoldsShear(nonnegativeShear));
-        tkeInPlane = 0.5 * (sigmaU.^2 + sigmaV.^2);
+        K_2C = 0.5 * (sigmaU.^2 + sigmaV.^2);
         % Set the lower ROI boundary (the wall) to y = 0 at this station.
         profileY_mm = info.y_mm(:) - info.wallY_mm;
         verticalProfiles{i,stationIndex} = struct( ...
@@ -391,6 +465,8 @@ for stationIndex = 1:numel(profileOffset_mm)
             'y_mm',profileY_mm, ...
             'y_over_H',profileY_mm / throatHeight_mm, ...
             'sampleCount',profileToPhysicalRows(sampleCount,info), ...
+            'nFlowFrames',diff(frameRanges(i,:))+1, ...
+            'alpha',profileToPhysicalRows(1-sampleCount/(diff(frameRanges(i,:))+1),info), ...
             'meanU_mps',meanU, ...
             'bulkThroatSpeed_mps',bulkThroatSpeed_mps(i), ...
             'meanU_over_Ub',meanU / bulkThroatSpeed_mps(i), ...
@@ -400,11 +476,11 @@ for stationIndex = 1:numel(profileOffset_mm)
             'sigmaV_over_Ub',sigmaV / bulkThroatSpeed_mps(i), ...
             'reynoldsShear_m2ps2',reynoldsShear, ...
             'reynoldsShear_over_Ub2',reynoldsShear / bulkThroatSpeed_mps(i)^2, ...
-            'sqrtReynoldsShear_over_Ub',sqrtReynoldsShear / bulkThroatSpeed_mps(i), ...
-            'tkeInPlane_m2ps2',tkeInPlane, ...
-            'tkeInPlane_over_Ub2',tkeInPlane / bulkThroatSpeed_mps(i)^2);
+            'K_2C_m2ps2',K_2C, ...
+            'K_2C_over_Ub2',K_2C / bulkThroatSpeed_mps(i)^2);
         validProfileRows = isfinite(meanU);
         maxProfileY = max(maxProfileY,max(profileY_mm(validProfileRows) / throatHeight_mm));
+        profileRuntimeSeconds(i) = profileRuntimeSeconds(i) + toc(profileTimer);
     end
 end
 
@@ -423,20 +499,66 @@ for stationIndex = 1:numel(profileOffset_mm)
     assert(folderCreated,'Cannot create station folder: %s',folderMessage);
 end
 
+% Keep each dilation in a separate data file, sharing the undilated cores.
+vapourProfilesByDilation = cell(1,numel(dilatePxList));
+vapourMaskedFractions = nan(numel(matPaths),numel(dilatePxList));
+vapourParameters = struct('threshold',threshold,'minArea',minArea, ...
+    'nBgFrames',nBgFrames,'dilateMinArea',dilateMinArea, ...
+    'flowToImageOffset',flowToImageOffset,'minimumSampleFraction',0.30, ...
+    'maskedFractionDenominator','ROI pixels');
+for dilationIndex = 1:numel(dilatePxList)
+    if isempty(maskedCases), break; end
+    dilatePx = dilatePxList(dilationIndex);
+    profileTag = sprintf('vapourMask_d%dpx',dilatePx);
+    maskedVerticalProfiles = cell(size(verticalProfiles));
+    for i = maskedCases(:)'
+        vapourTimer = tic;
+        [maskedVerticalProfiles(i,:),vapourMaskedFractions(i,dilationIndex)] = ...
+            computeMaskedVapourProfiles(profileInfo(i,:),verticalProfiles(i,:), ...
+            frameRanges(i,:),maxFramesPerRead,vapourCores{i}, ...
+            flowToImageOffset,dilatePx,dilateMinArea,profileTag);
+        vapourRuntimeSeconds(i) = vapourRuntimeSeconds(i) + toc(vapourTimer);
+    end
+    vapourProfilesByDilation{dilationIndex} = maskedVerticalProfiles;
+    meanMaskedFraction = vapourMaskedFractions(:,dilationIndex);
+    save(fullfile(plotMatDir,['vertical_profile_data_' profileTag '.mat']), ...
+        'maskedVerticalProfiles','profileTag','dilatePx','vapourParameters', ...
+        'analysis1VideoPaths','maskedCases','meanMaskedFraction', ...
+        'profileOffset_mm','matPaths','caseLabels','frameRanges','analysisPhase', ...
+        'caseIndices','throatHeight_mm','caseFlowRate_Lpm','bulkThroatSpeed_mps','-v7.3');
+end
+for i = 1:numel(matPaths)
+    nFlowFrames = diff(frameRanges(i,:))+1;
+    if isempty(vapourCores{i})
+        fprintf(['Profiles | %s | frames used: %d (%d:%d) | ' ...
+            'mean masked fraction: 0 (unmasked) | runtime: %.3f s.\n'], ...
+            char(string(caseLabels{i})),nFlowFrames,frameRanges(i,:),profileRuntimeSeconds(i));
+    else
+        fprintf('Profiles | %s | frames used: %d (%d:%d) | runtime: %.3f s.\n', ...
+            char(string(caseLabels{i})),nFlowFrames,frameRanges(i,:), ...
+            profileRuntimeSeconds(i)+vapourRuntimeSeconds(i));
+        for dilationIndex = 1:numel(dilatePxList)
+            fprintf('  vapourMask_d%dpx | mean masked fraction: %.6f (%.3f%% of ROI).\n', ...
+                dilatePxList(dilationIndex),vapourMaskedFractions(i,dilationIndex), ...
+                100*vapourMaskedFractions(i,dilationIndex));
+        end
+    end
+end
+
 % Each metric uses one x scale across all stations and cases. Reference
 % order: black circles, green stars, blue, red, orange, purple.
-metricFields = {'meanU_over_Ub','sqrtReynoldsShear_over_Ub', ...
-    'sigmaU_over_Ub','sigmaV_over_Ub','tkeInPlane_over_Ub2'};
+metricFields = {'meanU_over_Ub','reynoldsShear_over_Ub2', ...
+    'sigmaU_over_Ub','sigmaV_over_Ub','K_2C_over_Ub2'};
 metricNames = {'Mean streamwise U','Reynolds shear stress', ...
     'Streamwise velocity standard deviation', ...
     'Wall-normal velocity standard deviation', ...
-    'In-plane turbulent kinetic energy'};
+    '2-component fluctuation energy K_2C'};
 metricLabels = {'$\overline{u}/U_b$', ...
-    '$\sqrt{-\overline{u''v''}}/U_b$', ...
+    '$-\overline{u''v''}/U_b^2$', ...
     '$\sigma_u/U_b$','$\sigma_v/U_b$', ...
-    '$k_{2D}/U_b^2$'};
-metricFileTags = {'mean_streamwise_U','sqrt_reynolds_shear', ...
-    'sigma_streamwise_U','sigma_wall_normal_V','tke_in_plane'};
+    '$K_{2C}/U_b^2$'};
+metricFileTags = {'mean_streamwise_U','signed_reynolds_shear', ...
+    'sigma_streamwise_U','sigma_wall_normal_V','K_2C'};
 for metricIndex = 1:numel(metricFields)
     metricMin = inf;
     metricMax = -inf;
@@ -453,8 +575,14 @@ for metricIndex = 1:numel(metricFields)
         continue
     end
     xAxisLimits = [min(0,metricMin) max(0,metricMax)];
+    if strcmp(metricFields{metricIndex},'reynoldsShear_over_Ub2')
+        xExtent = max(abs(xAxisLimits));
+        if xExtent == 0, xExtent = 0.01; end
+        xAxisLimits = [-xExtent xExtent];
+    end
     for stationIndex = 1:numel(profileOffset_mm)
-        fig = figure('Color','w','Position',[100 100 760 650]);
+        fig = figure('Color','w','Position',[100 100 760 650], ...
+            'Visible',figureVisibility);
         ax = axes(fig);
         hold(ax,'on');
         plottedCases = 0;
@@ -479,6 +607,9 @@ for metricIndex = 1:numel(metricFields)
             profileOffset_mm(stationIndex) / throatHeight_mm, ...
             char(analysisPhase)),xAxisLimits,[0 maxProfileY], ...
             metricLabels{metricIndex});
+        if strcmp(metricFields{metricIndex},'reynoldsShear_over_Ub2')
+            xline(ax,0,'--','HandleVisibility','off');
+        end
         lgd = legend(ax,'show','Location','best', ...
             'Interpreter','none','Box','off');
         set(lgd,'FontName','Times New Roman','FontSize',11);
@@ -493,6 +624,154 @@ for metricIndex = 1:numel(metricFields)
         close(fig);
         fprintf('Saved comparison plots: %s and %s\n', ...
             profilePlotPath,profileFigPath);
+    end
+end
+
+% Add one mean/gradient/production comparison per station using the saved
+% profiles. Differencing u/Ub against y/H gives (du/dy)*H/Ub directly.
+comparisonFields = {'meanU_over_Ub','meanGradient_H_over_Ub', ...
+    'production_H_over_Ub3'};
+comparisonNames = {'Mean streamwise U','Mean velocity gradient','Production'};
+comparisonLabels = {'$\overline{u}/U_b$', ...
+    '$(d\overline{u}/dy)H/U_b$', ...
+    '$-\overline{u''v''}(d\overline{u}/dy)H/U_b^3$'};
+for stationIndex = 1:numel(profileOffset_mm)
+    comparisonProfiles = verticalProfiles(:,stationIndex);
+    peakRows = zeros(numel(matPaths),1);
+    for i = 1:numel(matPaths)
+        profile = comparisonProfiles{i};
+        yH = profile.y_over_H;
+        uUb = profile.meanU_over_Ub;
+        meanGradient = nan(size(uUb));
+        % Central differences retain missing samples; do not bridge gaps.
+        if numel(uUb) >= 3
+            meanGradient(2:end-1) = (uUb(3:end)-uUb(1:end-2)) ./ ...
+                (yH(3:end)-yH(1:end-2));
+        end
+        % One-sided differences at the two profile boundaries.
+        if numel(uUb) >= 2
+            meanGradient(1) = (uUb(2)-uUb(1))/(yH(2)-yH(1));
+            meanGradient(end) = (uUb(end)-uUb(end-1))/(yH(end)-yH(end-1));
+        end
+        meanGradient(~isfinite(uUb) | ~isfinite(yH)) = NaN;
+        profile.meanGradient_H_over_Ub = meanGradient;
+        profile.production_H_over_Ub3 = ...
+            profile.reynoldsShear_over_Ub2 .* meanGradient;
+        comparisonProfiles{i} = profile;
+        validRows = find(isfinite(uUb) & isfinite(yH));
+        [~,peakIndex] = max(uUb(validRows));
+        peakRows(i) = validRows(peakIndex);
+    end
+    fig = figure('Color','w','Position',[100 100 1680 650], ...
+        'Visible',figureVisibility);
+    layout = tiledlayout(fig,1,3,'TileSpacing','compact','Padding','compact');
+    for panelIndex = 1:numel(comparisonFields)
+        ax = nexttile(layout);
+        hold(ax,'on');
+        panelMin = 0;
+        panelMax = 0;
+        for i = 1:numel(matPaths)
+            profile = comparisonProfiles{i};
+            values = profile.(comparisonFields{panelIndex});
+            validValues = values(isfinite(values) & isfinite(profile.y_over_H));
+            if isempty(validValues), continue; end
+            panelMin = min(panelMin,min(validValues));
+            panelMax = max(panelMax,max(validValues));
+            peakRow = peakRows(i);
+            seriesLabel = sprintf('%s (max U: y/H = %.3f)', ...
+                char(string(caseLabels{i})),profile.y_over_H(peakRow));
+            plotProfileSeries(ax,profile,comparisonFields{panelIndex}, ...
+                caseIndices(i),seriesLabel,markerOptions);
+            series = ax.Children(1);
+            % The same mean-U peak row is marked in every panel.
+            plot(ax,values(peakRow),profile.y_over_H(peakRow),'d', ...
+                'Color',series.Color,'MarkerFaceColor',series.Color, ...
+                'MarkerSize',8,'HandleVisibility','off');
+        end
+        styleProfileAxes(ax,comparisonNames{panelIndex}, ...
+            [panelMin panelMax],[0 maxProfileY],comparisonLabels{panelIndex});
+        if panelIndex > 1
+            xline(ax,0,'--','HandleVisibility','off');
+        end
+        lgd = legend(ax,'show','Location','best','Interpreter','none','Box','off');
+        set(lgd,'FontName','Times New Roman','FontSize',10);
+    end
+    title(layout,sprintf('Throat + %.3f H | %s | diamonds: maximum mean U', ...
+        profileOffset_mm(stationIndex)/throatHeight_mm,char(analysisPhase)), ...
+        'FontName','Times New Roman','FontSize',15,'FontWeight','normal');
+    comparisonBase = fullfile(stationDirs{stationIndex}, ...
+        sprintf('mean_gradient_production_xplus_%.2fmm_%s_station%02d', ...
+        profileOffset_mm(stationIndex),char(analysisPhase),stationIndex));
+    exportgraphics(fig,[comparisonBase '.png'],'Resolution',600);
+    savefig(fig,[comparisonBase '.fig']);
+    close(fig);
+    fprintf('Saved comparison plots: %s.png and %s.fig\n',comparisonBase,comparisonBase);
+end
+
+% One four-panel sensitivity figure per masked case and station.
+vapourFields = {'meanU_over_Ub','reynoldsShear_over_Ub2','K_2C_over_Ub2','alpha'};
+vapourNames = {'Mean streamwise U','Reynolds shear stress','In-plane fluctuation energy','Excluded sample fraction'};
+vapourLabels = {'$\overline{u}/U_b$','$-\overline{u''v''}/U_b^2$', ...
+    '$k_{2D}/U_b^2$','$\alpha$'};
+vapourColors = lines(numel(dilatePxList));
+for i = maskedCases(:)'
+    safeLabel = regexprep(char(string(caseLabels{i})),'[^A-Za-z0-9_-]','_');
+    for stationIndex = 1:numel(profileOffset_mm)
+        comparisonProfiles = cell(1,numel(dilatePxList)+1);
+        comparisonProfiles{1} = verticalProfiles{i,stationIndex};
+        comparisonTags = ["unmasked",compose("vapourMask_d%dpx",dilatePxList(:)')];
+        for dilationIndex = 1:numel(dilatePxList)
+            comparisonProfiles{dilationIndex+1} = ...
+                vapourProfilesByDilation{dilationIndex}{i,stationIndex};
+        end
+        fig = figure('Color','w','Position',[100 100 1900 650], ...
+            'Visible',figureVisibility);
+        layout = tiledlayout(fig,1,4,'TileSpacing','compact','Padding','compact');
+        for panelIndex = 1:numel(vapourFields)
+            ax = nexttile(layout);
+            hold(ax,'on');
+            panelMin = 0;
+            panelMax = 0;
+            yMax = 0;
+            for seriesIndex = 1:numel(comparisonProfiles)
+                profile = comparisonProfiles{seriesIndex};
+                values = profile.(vapourFields{panelIndex});
+                valid = isfinite(values) & isfinite(profile.y_over_H);
+                if any(valid)
+                    panelMin = min(panelMin,min(values(valid)));
+                    panelMax = max(panelMax,max(values(valid)));
+                end
+                yMax = max(yMax,max(profile.y_over_H(isfinite(profile.y_over_H))));
+                if seriesIndex == 1
+                    lineColor = [0.6 0.6 0.6];
+                else
+                    lineColor = vapourColors(seriesIndex-1,:);
+                end
+                plot(ax,values,profile.y_over_H,'Color',lineColor, ...
+                    'LineWidth',1.8,'DisplayName',char(comparisonTags(seriesIndex)));
+            end
+            if panelIndex == 4, panelMax = 1; end
+            styleProfileAxes(ax,vapourNames{panelIndex},[panelMin panelMax], ...
+                [0 yMax],vapourLabels{panelIndex});
+            if panelIndex == 2, xline(ax,0,'--','HandleVisibility','off'); end
+            lgd = legend(ax,'show','Location','best','Interpreter','none','Box','off');
+            set(lgd,'FontName','Times New Roman','FontSize',10);
+        end
+        title(layout,sprintf('%s | throat + %.3f H | %s', ...
+            char(string(caseLabels{i})),profileOffset_mm(stationIndex)/throatHeight_mm, ...
+            char(analysisPhase)),'FontName','Times New Roman','FontSize',15, ...
+            'FontWeight','normal','Interpreter','none');
+        plotName = sprintf('case%02d_%s_vapour_mask_comparison_xplus_%.2fmm_%s_station%02d', ...
+            caseIndices(i),safeLabel,profileOffset_mm(stationIndex),char(analysisPhase),stationIndex);
+        comparisonBase = fullfile(stationDirs{stationIndex},plotName);
+        exportgraphics(fig,[comparisonBase '.png'],'Resolution',600);
+        savefig(fig,[comparisonBase '.fig']);
+        close(fig);
+        save(fullfile(plotMatDir,[plotName '_data.mat']), ...
+            'comparisonProfiles','comparisonTags','vapourFields','vapourParameters', ...
+            'dilatePxList','analysis1VideoPaths','stationIndex','caseIndices', ...
+            'profileOffset_mm','frameRanges','analysisPhase','-v7.3');
+        fprintf('Saved vapour comparison: %s.png and %s.fig\n',comparisonBase,comparisonBase);
     end
 end
 
@@ -606,7 +885,7 @@ assert(isnumeric(negativeColorMin_mps) && ...
 
         fig = figure('Color','w','Units','pixels', ...
             'Position',[100 100 900 700], ...
-            'PaperPositionMode','auto','Visible','off');
+            'PaperPositionMode','auto','Visible',figureVisibility);
         ax = axes(fig);
         hold(ax,'on');
         maskPhysical = flipud(info.maskROI);
@@ -746,7 +1025,8 @@ stationColors = [ ...
 for i = 1:numel(matPaths)
     info = fileInfo{i};
     mapPhysical = meanSpeedMaps{i};
-    fig = figure('Color','w','Position',[100 100 1200 800]);
+    fig = figure('Color','w','Position',[100 100 1200 800], ...
+        'Visible',figureVisibility);
     ax = axes(fig);
     imageHandle = imagesc(ax,(info.x_mm-info.xThroat_mm)/throatHeight_mm, ...
         info.y_mm/throatHeight_mm,mapPhysical);
@@ -882,6 +1162,206 @@ fprintf('Completed analysis run: %s\n',runOutputDir);
 
 
 %% Helper functions used by the sections above
+
+function cores = prepareVapourCores(videoPath,neededImages,maskROI, ...
+        threshold,minArea,nBgFrames,coreFile)
+    assert(all(neededImages >= 1), ...
+        'Vapour pairing requests image %d; image indices must be positive.',neededImages(1));
+    imageSize = size(maskROI);
+    required = {'frameNumbers','maskPixelIndices','imageSize','parameters'};
+    if isfile(coreFile)
+        cached = load(coreFile);
+        assert(isfield(cached,'imageSize') && ...
+            isequal(double(cached.imageSize(:)'),imageSize), ...
+            'Cached vapour imageSize does not match maskROI: %s',coreFile);
+        matchingParameters = false;
+        if all(isfield(cached,required)) && isstruct(cached.parameters)
+            p = cached.parameters;
+            matchingParameters = all(isfield(p,{'threshold','minArea','nBgFrames'})) && ...
+                isequal(p.threshold,threshold) && isequal(p.minArea,minArea) && ...
+                isequal(p.nBgFrames,nBgFrames);
+        end
+        % Reject a cache from a different video or ROI when provenance is present.
+        if isfield(cached,'videoPath')
+            matchingParameters = matchingParameters && ...
+                isequal(string(cached.videoPath),string(videoPath));
+        end
+        if isfield(cached,'maskROI')
+            matchingParameters = matchingParameters && isequal(cached.maskROI,maskROI);
+        end
+        if matchingParameters && all(ismember(neededImages,cached.frameNumbers))
+            cores = cached;
+            fprintf('Loaded vapour cores: %s (images %d:%d).\n', ...
+                coreFile,neededImages(1),neededImages(end));
+        end
+    end
+    if ~exist('cores','var')
+        assert(isfile(videoPath),'Vapour video not found: %s',char(videoPath));
+        v = VideoReader(videoPath);
+        assert(isequal([v.Height v.Width],imageSize), ...
+            'Vapour video imageSize does not match maskROI: %s',char(videoPath));
+        % When NumFrames is unavailable, indexed reads below check every needed image.
+        totalFrames = [];
+        try
+            totalFrames = double(v.NumFrames);
+        catch
+        end
+        if isscalar(totalFrames) && isfinite(totalFrames) && totalFrames >= 1
+            assert(neededImages(end) <= totalFrames, ...
+                'Needed image %d is missing from %s (only %d images).', ...
+                neededImages(end),char(videoPath),totalFrames);
+        end
+        [background,backgroundFrameNumbers,effectiveBgFrames] = ...
+            computeVapourBackground(v,nBgFrames);
+        assert(isequal(size(background),imageSize), ...
+            'Vapour background imageSize does not match maskROI: %s',char(videoPath));
+        frameNumbers = neededImages;
+        maskPixelIndices = cell(numel(frameNumbers),1);
+        % Decode each needed core image once by index; background sampling is
+        % performed independently inside the existing computeVapourBackground.
+        for imageIndex = 1:numel(frameNumbers)
+            n = frameNumbers(imageIndex);
+            try
+                rawFrame = read(v,n);
+            catch readError
+                error('vapourProfiles:MissingImage', ...
+                    'Needed image %d is missing/unreadable in %s: %s', ...
+                    n,char(videoPath),readError.message);
+            end
+            assert(isequal([size(rawFrame,1) size(rawFrame,2)],imageSize), ...
+                'Image %d imageSize does not match maskROI: %s',n,char(videoPath));
+            core = detectVapourCore(rawFrame,background,maskROI,threshold,minArea);
+            maskPixelIndices{imageIndex} = find(core);
+        end
+        parameters = struct('threshold',threshold,'minArea',minArea, ...
+            'nBgFrames',nBgFrames,'effectiveBgFrames',effectiveBgFrames, ...
+            'backgroundFrameNumbers',backgroundFrameNumbers, ...
+            'blobConnectivity',8,'dilationApplied',false);
+        save(coreFile,'frameNumbers','maskPixelIndices','imageSize','parameters', ...
+            'videoPath','maskROI','-v7.3');
+        cores = struct('frameNumbers',frameNumbers,'maskPixelIndices',{maskPixelIndices}, ...
+            'imageSize',imageSize,'parameters',parameters);
+        fprintf('Saved vapour cores: %s (images %d:%d).\n', ...
+            coreFile,neededImages(1),neededImages(end));
+    end
+    assert(iscell(cores.maskPixelIndices) && ...
+        numel(cores.maskPixelIndices) == numel(cores.frameNumbers) && ...
+        numel(unique(cores.frameNumbers)) == numel(cores.frameNumbers), ...
+        'Invalid vapour core frame/index mapping: %s',coreFile);
+    [present,locations] = ismember(neededImages,cores.frameNumbers);
+    assert(all(present),'Needed images are missing from vapour cores: %s',coreFile);
+    for imageIndex = locations(:)'
+        indices = cores.maskPixelIndices{imageIndex};
+        assert(isnumeric(indices) && isreal(indices) && ...
+            (isempty(indices) || isvector(indices)) && all(isfinite(indices(:))) && ...
+            all(indices(:) == fix(indices(:))) && ...
+            all(indices(:) >= 1 & indices(:) <= prod(imageSize)), ...
+            'Invalid linear mask indices for image %d in %s.', ...
+            cores.frameNumbers(imageIndex),coreFile);
+    end
+    % Align cache entries to the exact consecutive image range for O(1) pairing.
+    cores.frameNumbers = neededImages;
+    cores.maskPixelIndices = cores.maskPixelIndices(locations);
+    cores.coreFile = coreFile;
+end
+
+function [profiles,meanMaskedFraction] = computeMaskedVapourProfiles( ...
+        stationInfo,unmaskedProfiles,frameRange,maxFramesPerRead,cores, ...
+        flowToImageOffset,dilatePx,dilateMinArea,profileTag)
+    nStations = numel(stationInfo);
+    nFlowFrames = diff(frameRange)+1;
+    moments = cell(1,nStations);
+    for stationIndex = 1:nStations
+        % Columns: sample count, sum U, sum V, sum U^2, sum V^2, sum UV.
+        moments{stationIndex} = zeros(numel(stationInfo{stationIndex}.profileImageRows),6);
+    end
+    if dilatePx > 0, disk = strel('disk',dilatePx,0); end
+    maskROI = stationInfo{1}.maskROI;
+    roiArea = nnz(maskROI);
+    maskedAreaSum = 0;
+    for k0 = frameRange(1):maxFramesPerRead:frameRange(2)
+        k1 = min(k0+maxFramesPerRead-1,frameRange(2));
+        columnMasks = cell(1,nStations);
+        for stationIndex = 1:nStations
+            columnMasks{stationIndex} = false(size(moments{stationIndex},1),k1-k0+1);
+        end
+        for j = 1:k1-k0+1
+            k = k0+j-1;
+            imageIndex = k+flowToImageOffset-cores.frameNumbers(1)+1;
+            % Union and blob splitting stay in IMAGE coordinates.
+            core = false(cores.imageSize);
+            core(cores.maskPixelIndices{imageIndex}) = true;
+            core(cores.maskPixelIndices{imageIndex+1}) = true;
+            big = bwareaopen(core,dilateMinArea,8);
+            small = core & ~big;
+            if dilatePx > 0
+                mask = imdilate(big,disk) | small;
+            else
+                mask = big | small;  % Radius zero still masks the pair union.
+            end
+            maskedAreaSum = maskedAreaSum + nnz(mask & maskROI);
+            for stationIndex = 1:nStations
+                info = stationInfo{stationIndex};
+                columnMasks{stationIndex}(:,j) = ...
+                    mask(info.profileImageRows,info.profileXIndex);
+            end
+        end
+        for stationIndex = 1:nStations
+            [uColumn,vColumn] = readUVProfileBlock(stationInfo{stationIndex},k0,k1);
+            uColumn = double(uColumn);
+            vColumn = -double(vColumn);
+            uColumn(columnMasks{stationIndex}) = NaN;
+            vColumn(columnMasks{stationIndex}) = NaN;
+            validColumn = isfinite(uColumn) & isfinite(vColumn);
+            uColumn(~validColumn) = 0;
+            vColumn(~validColumn) = 0;
+            moments{stationIndex} = moments{stationIndex} + ...
+                [sum(validColumn,2),sum(uColumn,2),sum(vColumn,2), ...
+                 sum(uColumn.^2,2),sum(vColumn.^2,2),sum(uColumn.*vColumn,2)];
+        end
+    end
+    meanMaskedFraction = maskedAreaSum/(roiArea*nFlowFrames);
+    profiles = cell(1,nStations);
+    for stationIndex = 1:nStations
+        info = stationInfo{stationIndex};
+        sums = moments{stationIndex};
+        sampleCount = sums(:,1);
+        hasSamples = sampleCount >= 2 & sampleCount >= 0.30*nFlowFrames;
+        meanU = nan(size(sampleCount));
+        meanV = meanU;
+        varU = meanU;
+        varV = meanU;
+        covUV = meanU;
+        meanU(hasSamples) = sums(hasSamples,2)./sampleCount(hasSamples);
+        meanV(hasSamples) = sums(hasSamples,3)./sampleCount(hasSamples);
+        varU(hasSamples) = max(0,sums(hasSamples,4)./sampleCount(hasSamples)-meanU(hasSamples).^2);
+        varV(hasSamples) = max(0,sums(hasSamples,5)./sampleCount(hasSamples)-meanV(hasSamples).^2);
+        covUV(hasSamples) = sums(hasSamples,6)./sampleCount(hasSamples)-meanU(hasSamples).*meanV(hasSamples);
+        profile = unmaskedProfiles{stationIndex};
+        profile.sampleCount = profileToPhysicalRows(sampleCount,info);
+        profile.nFlowFrames = nFlowFrames;
+        % Keep alpha/count diagnostic rows even where velocity statistics are NaN.
+        profile.alpha = profileToPhysicalRows(1-sampleCount/nFlowFrames,info);
+        profile.meanU_mps = profileToPhysicalRows(meanU,info);
+        profile.sigmaU_mps = profileToPhysicalRows(sqrt(varU),info);
+        profile.sigmaV_mps = profileToPhysicalRows(sqrt(varV),info);
+        profile.reynoldsShear_m2ps2 = profileToPhysicalRows(-covUV,info);
+        profile.K_2C_m2ps2 = 0.5*(profile.sigmaU_mps.^2+profile.sigmaV_mps.^2);
+        Ub = profile.bulkThroatSpeed_mps;
+        profile.meanU_over_Ub = profile.meanU_mps/Ub;
+        profile.sigmaU_over_Ub = profile.sigmaU_mps/Ub;
+        profile.sigmaV_over_Ub = profile.sigmaV_mps/Ub;
+        profile.reynoldsShear_over_Ub2 = profile.reynoldsShear_m2ps2/Ub^2;
+        profile.K_2C_over_Ub2 = profile.K_2C_m2ps2/Ub^2;
+        profile.profileTag = profileTag;
+        profile.dilatePx = dilatePx;
+        profile.dilateMinArea = dilateMinArea;
+        profile.flowToImageOffset = flowToImageOffset;
+        profile.coreMaskFile = cores.coreFile;
+        profile.meanMaskedFraction = meanMaskedFraction;
+        profiles{stationIndex} = profile;
+    end
+end
 
 function phases = normalizePhases(values,parameterName,allowEmpty)
     phases = lower(strtrim(string(values)));

@@ -6,19 +6,23 @@ or add overrides in an individual script's refinement section.
 
 | Main analysis section | Plotting script | Saved input |
 | --- | --- | --- |
-| 4: optional ROI frame summary | `plot_05_frame_summary.m` | `frame_summary_data.mat` |
-| 1: all vertical profiles | `plot_06_vertical_profiles.m` | `vertical_profile_data.mat` |
-| 1: mean streamwise velocity | `plot_06a_mean_streamwise_velocity.m` | Same profile MAT |
-| 1: Reynolds shear | `plot_06b_reynolds_shear.m` | Same profile MAT |
-| 1: streamwise fluctuations | `plot_06c_streamwise_fluctuations.m` | Same profile MAT |
-| 1: wall-normal fluctuations | `plot_06d_wall_normal_fluctuations.m` | Same profile MAT |
-| 1: in-plane TKE | `plot_06e_in_plane_tke.m` | Same profile MAT |
-| 3: mean-speed maps and station lines | `plot_07_mean_speed_maps.m` | `mean_speed_map_data.mat` |
-| 2: instantaneous U and streamlines | `plot_09_instantaneous_velocity.m` | `caseNN_label.mat` subsets |
+| 1: all vertical profiles | `plot_01_vertical_profiles.m` | `vertical_profile_data.mat` |
+| 1: mean streamwise velocity | `plot_01a_mean_streamwise_velocity.m` | Same profile MAT |
+| 1: Reynolds shear | `plot_01b_reynolds_shear.m` | Same profile MAT |
+| 1: streamwise fluctuations | `plot_01c_streamwise_fluctuations.m` | Same profile MAT |
+| 1: wall-normal fluctuations | `plot_01d_wall_normal_fluctuations.m` | Same profile MAT |
+| 1: 2-component fluctuation energy K_2C | `plot_01e_two_component_fluctuation_energy.m` | Same profile MAT |
+| 2: instantaneous U and streamlines | `plot_02_instantaneous_velocity.m` | `caseNN_label.mat` subsets |
+| 3: mean-speed maps and station lines | `plot_03_mean_speed_maps.m` | `mean_speed_map_data.mat` |
+| 4: optional ROI frame summary | `plot_04_frame_summary.m` | `frame_summary_data.mat` |
 
-Plot script filenames retain their older section numbering. The main script
-now uses the analysis numbers above. The frame-summary plot renders time
-traces from the table saved by analysis 4.
+Plot script filenames and headings match the analysis numbers in
+`RAFT_chunk_analysis.m`. The frame-summary plot renders time traces from
+the table saved by analysis 4.
+
+The fifth profile metric is 2-component fluctuation energy,
+`K_2C = 0.5 * (sigmaU^2 + sigmaV^2)`, plotted as `K_2C / Ub^2`.
+Replotting also accepts the older `tkeInPlane_over_Ub2` saved field.
 
 ## Selecting data
 
